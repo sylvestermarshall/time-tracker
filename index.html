@@ -93,6 +93,7 @@
     display: block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.06em; color: var(--ink-faint); margin-bottom: 0.28rem;
   }
+  .time-in { font-family: "JetBrains Mono", monospace; letter-spacing: 0.05em; }
   input[type="text"], input[type="time"], input[type="date"], textarea {
     width: 100%; font: inherit; font-size: 0.95rem;
     background: var(--surface-raised); color: var(--ink);
@@ -212,7 +213,8 @@
       <div class="field">
         <label class="lbl" for="f-time">Start time</label>
         <div class="time-wrap">
-          <input type="time" id="f-time" required>
+          <input type="text" id="f-time" class="time-in" inputmode="numeric" autocomplete="off"
+                 maxlength="5" placeholder="0930" aria-label="Start time, 24-hour, type four digits" required>
           <button type="button" class="btn btn-ghost btn-small" id="nowBtn">Now</button>
           <button type="button" class="btn btn-ghost btn-small" id="agoBtn" title="Tap to step back a minute at a time">1 min ago</button>
         </div>
@@ -304,6 +306,34 @@
 
   function nowHHMM() { var d = new Date(); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
   function hhmmMinsAgo(mins) { var d = new Date(Date.now() - mins * 60000); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
+
+  // "0930" / "930" / "9:30" -> "09:30"; last two digits are minutes, the rest is the hour.
+  // returns "" if the digits don't make a valid 24-hour time.
+  function normTime(raw) {
+    var s = String(raw == null ? "" : raw).replace(/\D/g, "");
+    if (!s) return "";
+    var h, m;
+    if (s.length <= 2) { h = +s; m = 0; }
+    else { h = +s.slice(0, -2); m = +s.slice(-2); }
+    if (h > 23 || m > 59) return "";
+    return pad(h) + ":" + pad(m);
+  }
+  // live: drop non-digits, cap at 4, and slot a colon before the last two
+  function liveTimeFormat(raw) {
+    var s = String(raw == null ? "" : raw).replace(/\D/g, "").slice(0, 4);
+    return s.length >= 3 ? s.slice(0, -2) + ":" + s.slice(-2) : s;
+  }
+  function attachTimeInput(el) {
+    el.addEventListener("input", function () {
+      var start = el.selectionStart, before = el.value;
+      el.value = liveTimeFormat(el.value);
+      if (start === before.length) el.setSelectionRange(el.value.length, el.value.length);
+    });
+    el.addEventListener("blur", function () {
+      var t = normTime(el.value);
+      if (t) el.value = t;
+    });
+  }
 
   // combine a day key (YYYY-MM-DD) + HH:MM into a local ISO timestamp
   function makeStartAt(dayK, hhmm) {
@@ -576,7 +606,7 @@
           durHtml +
         "</div>" +
         '<div class="entry-edit" hidden>' +
-          '<div class="field"><label class="lbl">Start time</label><input type="time" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
+          '<div class="field"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
           '<div class="field"><label class="lbl">What</label><input type="text" data-f="narration" value="' + escapeHtml(e.narration) + '"></div>' +
           '<div class="field"><label class="lbl">Type</label><input type="text" data-f="type" value="' + escapeHtml(e.type) + '"></div>' +
           '<div class="form-actions">' +
@@ -644,11 +674,15 @@
     agoBtn.textContent = agoN + " min ago";
   });
 
+  attachTimeInput(fTime);
+
   document.getElementById("addForm").addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (!fTime.value) { fTime.value = nowHHMM(); }
+    var t = fTime.value.trim() ? normTime(fTime.value) : nowHHMM();
+    if (!t) { fTime.value = ""; fTime.focus(); return; }
+    fTime.value = t;
     if (!fNarr.value.trim()) { fNarr.focus(); return; }
-    addEntry(fTime.value, fNarr.value, fType.value);
+    addEntry(t, fNarr.value, fType.value);
     fNarr.value = "";
     fTime.value = nowHHMM();
     resetAgo();
@@ -657,7 +691,7 @@
   });
 
   document.getElementById("stopBtn").addEventListener("click", function () {
-    addStop(fTime.value || nowHHMM());
+    addStop(normTime(fTime.value) || nowHHMM());
   });
 
   // type autocomplete
@@ -721,13 +755,17 @@
       var willOpen = editBox.hidden;
       document.querySelectorAll(".entry-edit").forEach(function (b) { b.hidden = true; });
       editBox.hidden = !willOpen;
+      if (willOpen) attachTimeInput(editBox.querySelector('[data-f="time"]'));
       return;
     }
     if (act === "cancel") { editBox.hidden = true; render(); return; }
     if (act === "delete") { if (confirm("Delete this entry?")) deleteEntry(id); return; }
     if (act === "save") {
+      var timeEl = editBox.querySelector('[data-f="time"]');
+      var t = normTime(timeEl.value);
+      if (!t) { timeEl.focus(); return; }
       updateEntry(id, {
-        time: editBox.querySelector('[data-f="time"]').value,
+        time: t,
         narration: editBox.querySelector('[data-f="narration"]').value,
         type: editBox.querySelector('[data-f="type"]').value
       });
