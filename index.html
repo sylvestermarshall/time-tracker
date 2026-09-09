@@ -446,7 +446,6 @@
   var viewDate = todayKey();
   var route = "home";              // home · day · overview · goals
   var goalsView = "categories";    // within the goals route: "categories" or "tasks"
-  var HOME_PREVIEW = 3;            // entries shown on the home view before "Show all"
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -1222,11 +1221,7 @@
     var now = Date.now();
     var isToday = viewDate === todayKey();
     var allRows = rowsForDay(viewDate);
-    if (!allRows.length) {
-      ul.innerHTML = '<li class="empty">Nothing logged for this day yet.</li>';
-      showMore.hidden = true;
-      return;
-    }
+    var nonStop = allRows.filter(function (r) { return !r.entry.stop; });
 
     function rowDuration(r) {
       var s = new Date(r.entry.startAt).getTime();
@@ -1241,17 +1236,22 @@
       catTotals[k] = (catTotals[k] || 0) + rowDuration(r);
     });
 
-    var rows = allRows, hiddenCount = 0;
-    if (route === "home" && allRows.length > HOME_PREVIEW) {
-      hiddenCount = allRows.length - HOME_PREVIEW;
-      rows = allRows.slice(-HOME_PREVIEW); // the most recent few
-    }
+    // home shows only what's running now; the full day view shows everything
+    var rows = route === "home" ? allRows.filter(function (r) { return r.ongoing; }) : allRows;
     showMore.hidden = route !== "home";
     if (route === "home") {
-      showMore.textContent = hiddenCount
-        ? "Show all " + allRows.length + " entries →"
-        : "Open full day →";
+      showMore.textContent = "Show all " + nonStop.length + (nonStop.length === 1 ? " entry →" : " entries →");
     }
+
+    if (!rows.length) {
+      ul.innerHTML = '<li class="empty">' +
+        (route === "home"
+          ? (nonStop.length ? "Nothing running right now." : "Nothing logged yet today.")
+          : "Nothing logged for this day yet.") +
+        "</li>";
+      return;
+    }
+
     ul.innerHTML = rows.map(function (r) {
       var e = r.entry;
       if (e.stop) {
