@@ -142,8 +142,22 @@
 
   .home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.9rem; }
   .home-head .date-label { font-weight: 700; font-size: 1rem; }
+  .linkbtn { border: 0; background: none; font: inherit; font-weight: 700; color: var(--accent); cursor: pointer; padding: 0; }
 
   .show-more { width: 100%; margin-top: 0.3rem; }
+
+  /* ---------- goals page ---------- */
+  .goals-intro { font-size: 0.85rem; color: var(--ink-soft); line-height: 1.55; margin: 0 0 1rem; }
+  .goals-intro code {
+    font-family: "JetBrains Mono", monospace; font-size: 0.78rem;
+    background: var(--line-soft); padding: 0.05rem 0.3rem; border-radius: 4px;
+  }
+  .goal-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.65rem 0; border-bottom: 1px solid var(--line-soft); }
+  .goal-row:last-child { border-bottom: 0; }
+  .goal-cat { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; word-break: break-word; }
+  .goal-cat .dot { width: 0.7rem; height: 0.7rem; border-radius: 3px; flex-shrink: 0; }
+  .goal-row input { width: 6.5rem; flex-shrink: 0; text-align: right; font-family: "JetBrains Mono", monospace; }
+  .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
 
   /* ---------- day summary ---------- */
   .summary { margin-bottom: 1rem; }
@@ -278,6 +292,7 @@
   <!-- HOME: heading above the recent-entries preview -->
   <div class="home-head" id="homeHead">
     <span class="date-label" id="homeDateLabel"></span>
+    <button type="button" class="linkbtn" id="toGoals">Goals →</button>
   </div>
 
   <!-- DAY: full-day view with date navigation -->
@@ -291,6 +306,12 @@
   <div class="summary" id="summary" hidden></div>
   <ul class="timeline" id="timeline"></ul>
   <button class="btn btn-ghost show-more" id="showMore" type="button" hidden></button>
+
+  <!-- GOALS: per-category daily targets -->
+  <div id="goalsPage" hidden>
+    <p class="goals-intro">Target time per category, per day. Type hours and minutes — e.g. <code>1h 30m</code>, <code>45m</code>, or <code>1:30</code>.</p>
+    <div id="goalsList"></div>
+  </div>
 </div>
 
 <!-- sync modal -->
@@ -337,7 +358,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [] };
+  var state = { entries: [], categories: [], goals: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -407,6 +428,24 @@
     if (h) return h + "h";
     return m + "m";
   }
+  function fmtMins(mins) { return fmtDuration((mins || 0) * 60000); }
+  // "1h 30m" / "1:30" / "90" / "90m" / "1.5h" -> minutes (0 if unparseable / empty)
+  function parseDuration(str) {
+    str = String(str == null ? "" : str).trim().toLowerCase();
+    if (!str) return 0;
+    var colon = str.match(/^(\d+):([0-5]?\d)$/);
+    if (colon) return (+colon[1]) * 60 + (+colon[2]);
+    var total = 0, hit = false;
+    var hh = str.match(/(\d+(?:\.\d+)?)\s*h/);
+    if (hh) { total += Math.round(parseFloat(hh[1]) * 60); hit = true; }
+    var mm = str.match(/(\d+)\s*m/);
+    if (mm) { total += +mm[1]; hit = true; }
+    if (!hit) {
+      var n = parseFloat(str);
+      return isNaN(n) ? 0 : Math.round(n); // a bare number is minutes
+    }
+    return total;
+  }
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -441,7 +480,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [] }; }
+  function emptyState() { return { entries: [], categories: [], goals: {} }; }
 
   function normalizeState(raw) {
     raw = (raw && typeof raw === "object") ? raw : {};
@@ -467,7 +506,16 @@
     var rawCats = Array.isArray(raw.categories) ? raw.categories : (Array.isArray(raw.types) ? raw.types : []);
     rawCats.forEach(function (t) { if (t) catSet[t] = true; });
     entries.forEach(function (e) { if (e.category) catSet[e.category] = true; });
-    return { entries: entries, categories: Object.keys(catSet).sort() };
+
+    // per-category daily goal, in minutes
+    var goals = {};
+    if (raw.goals && typeof raw.goals === "object") {
+      Object.keys(raw.goals).forEach(function (k) {
+        var v = Math.round(+raw.goals[k]);
+        if (k && v > 0) goals[k] = v;
+      });
+    }
+    return { entries: entries, categories: Object.keys(catSet).sort(), goals: goals };
   }
 
   function loadLocalCache() {
@@ -618,10 +666,12 @@
   }
 
   // ---------- routing ----------
-  // hash "#day" or "#day/YYYY-MM-DD" -> full day view; anything else -> home (today)
+  // hash "#day[/YYYY-MM-DD]" -> full day, "#goals" -> goals page, else home (today)
   function applyRoute() {
     var h = (location.hash || "").replace(/^#\/?/, "");
-    if (h.indexOf("day") === 0) {
+    if (h === "goals") {
+      route = "goals";
+    } else if (h.indexOf("day") === 0) {
       var parts = h.split("/");
       route = "day";
       viewDate = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || "") ? parts[1] : todayKey();
@@ -629,14 +679,20 @@
       route = "home";
       viewDate = todayKey();
     }
-    document.getElementById("backHome").hidden = route !== "day";
-    document.getElementById("daynav").hidden = route !== "day";
-    document.getElementById("homeHead").hidden = route !== "home";
-    document.getElementById("addPanel").hidden = route !== "home";
+    var isHome = route === "home", isDay = route === "day", isGoals = route === "goals";
+    document.getElementById("backHome").hidden = isHome;
+    document.getElementById("daynav").hidden = !isDay;
+    document.getElementById("homeHead").hidden = !isHome;
+    document.getElementById("addPanel").hidden = !isHome;
+    document.getElementById("goalsPage").hidden = !isGoals;
+    document.getElementById("timeline").hidden = isGoals;
+    document.getElementById("summary").hidden = isGoals;
+    document.getElementById("showMore").hidden = !isHome;
     window.scrollTo(0, 0);
     render();
   }
   function goToDay(dayK) { location.hash = "#day/" + dayK; }
+  function goToGoals() { location.hash = "#goals"; }
   function goHome() {
     if (location.hash) location.hash = "";
     else applyRoute();
@@ -644,6 +700,7 @@
 
   // ---------- render ----------
   function render() {
+    if (route === "goals") { renderGoals(); return; }
     if (route === "home") viewDate = todayKey();
     renderHeads();
     renderSummary();
@@ -658,6 +715,23 @@
     document.getElementById("homeDateLabel").innerHTML = label;
     document.getElementById("datePicker").value = viewDate;
     document.getElementById("pageTitle").textContent = route === "day" ? nice : "Time Tracker";
+  }
+
+  function renderGoals() {
+    document.getElementById("pageTitle").textContent = "Daily goals";
+    var list = document.getElementById("goalsList");
+    var cats = state.categories.slice().sort(function (a, b) { return a.localeCompare(b); });
+    if (!cats.length) {
+      list.innerHTML = '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
+      return;
+    }
+    list.innerHTML = cats.map(function (c) {
+      var g = state.goals[c] || 0;
+      return '<div class="goal-row" data-cat="' + escapeHtml(c) + '">' +
+        '<span class="goal-cat"><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</span>" +
+        '<input type="text" inputmode="text" autocomplete="off" placeholder="none" value="' + (g ? escapeHtml(fmtMins(g)) : "") + '">' +
+      "</div>";
+    }).join("");
   }
 
   function renderSummary() {
@@ -858,6 +932,13 @@
       return s;
     });
   }
+  function setGoal(category, mins) {
+    queueMutation(function (s) {
+      s.goals = Object.assign({}, s.goals);
+      if (mins > 0) s.goals[category] = mins; else delete s.goals[category];
+      return s;
+    });
+  }
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
@@ -1029,11 +1110,21 @@
   });
   document.getElementById("showMore").addEventListener("click", function () { goToDay(viewDate); });
   document.getElementById("backHome").addEventListener("click", goHome);
+  document.getElementById("toGoals").addEventListener("click", goToGoals);
   window.addEventListener("hashchange", applyRoute);
+
+  // ---------- goals page ----------
+  document.getElementById("goalsList").addEventListener("change", function (ev) {
+    var row = ev.target.closest(".goal-row");
+    if (!row || ev.target.tagName !== "INPUT") return;
+    var mins = parseDuration(ev.target.value);
+    ev.target.value = mins ? fmtMins(mins) : "";
+    setGoal(row.dataset.cat, mins);
+  });
 
   // keep the "now" ticking for the ongoing entry
   setInterval(function () {
-    if (viewDate === todayKey() && document.querySelector(".t-dur .now")) {
+    if ((route === "home" || route === "day") && viewDate === todayKey() && document.querySelector(".t-dur .now")) {
       renderSummary(); renderTimeline();
     }
   }, 30000);
