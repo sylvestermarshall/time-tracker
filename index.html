@@ -184,10 +184,6 @@
     font-size: 0.8rem; line-height: 1; padding: 0;
   }
   .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
-  .lane-tag {
-    font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--accent); vertical-align: 0.05em;
-  }
   .entry-main { flex: 1; min-width: 0; }
   .entry-narration { font-size: 0.95rem; font-weight: 700; line-height: 1.35; word-wrap: break-word; color: var(--ink); }
   .entry-category {
@@ -758,7 +754,6 @@
           '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) +
             '</span><span class="t-end">' + endLabel + "</span></span>" +
           '<span class="entry-main">' +
-            (along ? '<span class="lane-tag">∥ alongside</span> ' : "") +
             '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
           "</span>" +
