@@ -675,6 +675,9 @@
   });
 
   attachTimeInput(fTime);
+  // focusing the new-entry time field clears it so you can type fresh 4 digits
+  // (the inline edit field keeps its value)
+  fTime.addEventListener("focus", function () { fTime.value = ""; });
 
   document.getElementById("addForm").addEventListener("submit", function (ev) {
     ev.preventDefault();
