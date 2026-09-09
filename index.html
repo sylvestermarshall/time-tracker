@@ -678,6 +678,14 @@
   // focusing the new-entry time field clears it so you can type fresh 4 digits
   // (the inline edit field keeps its value)
   fTime.addEventListener("focus", function () { fTime.value = ""; });
+  // once a full 4-digit time is in, jump to the narration field automatically
+  fTime.addEventListener("input", function () {
+    var digits = fTime.value.replace(/\D/g, "");
+    if (digits.length === 4) {
+      var t = normTime(digits);
+      if (t) { fTime.value = t; fNarr.focus(); }
+    }
+  });
 
   document.getElementById("addForm").addEventListener("submit", function (ev) {
     ev.preventDefault();
