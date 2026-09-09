@@ -102,6 +102,12 @@
   input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   .time-wrap { display: flex; gap: 0.4rem; }
   .time-wrap input { flex: 1; }
+  .check-row {
+    display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.6rem 0 0.2rem;
+    font-size: 0.85rem; color: var(--ink-soft); line-height: 1.35; cursor: pointer;
+  }
+  .check-row input { width: auto; margin-top: 0.15rem; flex-shrink: 0; }
+  .lbl .opt { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
   .btn {
     font: inherit; font-weight: 700; border-radius: 9px; padding: 0.55rem 0.9rem;
     cursor: pointer; border: 1px solid transparent; white-space: nowrap;
@@ -143,6 +149,9 @@
   .cat-legend { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; margin-top: 0.5rem; }
   .cat-legend .lg { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--ink-soft); }
   .cat-legend .dot { width: 0.6rem; height: 0.6rem; border-radius: 3px; flex-shrink: 0; }
+  .along-summary { margin-top: 0.6rem; padding-top: 0.55rem; border-top: 1px dashed var(--line); }
+  .along-summary .along-head { font-size: 0.83rem; color: var(--ink-soft); margin-bottom: 0.4rem; }
+  .along-summary .along-head b { color: var(--ink); }
 
   /* ---------- timeline ---------- */
   .timeline { list-style: none; margin: 0; padding: 0; }
@@ -159,6 +168,15 @@
   }
   .entry-dur.ongoing { color: var(--accent-ink); background: var(--accent); }
   .entry-dur.manual { box-shadow: inset 0 0 0 1px var(--accent-soft-line); }
+  .dur-stop {
+    margin-left: 0.3rem; border: 0; background: none; color: inherit; cursor: pointer;
+    font-size: 0.7rem; line-height: 1; padding: 0; opacity: 0.85;
+  }
+  .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
+  .lane-tag {
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent); vertical-align: 0.05em;
+  }
   .entry-main { flex: 1; min-width: 0; }
   .entry-narration { font-size: 0.95rem; line-height: 1.35; word-wrap: break-word; }
   .entry-category {
@@ -229,8 +247,15 @@
         <input type="text" id="f-category" placeholder="e.g. Work" role="combobox" aria-autocomplete="list" aria-expanded="false">
         <div class="ac-list" id="categoryAc" hidden></div>
       </div>
+      <label class="check-row">
+        <input type="checkbox" id="f-concurrent"> Runs alongside another task (doesn't end the current one)
+      </label>
+      <div class="field" id="f-end-field" hidden>
+        <label class="lbl" for="f-end">End time <span class="opt">— optional, blank means ongoing</span></label>
+        <input type="text" id="f-end" class="time-in" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="ongoing">
+      </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Log entry</button>
+        <button type="submit" class="btn btn-primary" id="logBtn">Log entry</button>
         <button type="button" class="btn btn-ghost" id="stopBtn" title="Mark the end of the current task">Stop</button>
       </div>
     </form>
@@ -342,6 +367,15 @@
     var d = new Date(+dp[0], +dp[1] - 1, +dp[2], +tp[0], +tp[1], 0, 0);
     return d.toISOString();
   }
+  // an end HH:MM on the same day as startIso; if it lands at/before the start it
+  // ran past midnight, so bump a day. "" hhmm -> "" (no end).
+  function makeEndAt(startIso, hhmm) {
+    if (!hhmm) return "";
+    var sd = new Date(startIso), tp = hhmm.split(":");
+    var ed = new Date(sd.getFullYear(), sd.getMonth(), sd.getDate(), +tp[0], +tp[1], 0, 0);
+    if (ed.getTime() <= sd.getTime()) ed.setDate(ed.getDate() + 1);
+    return ed.toISOString();
+  }
   function fmtClock(iso) { var d = new Date(iso); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
   function fmtDuration(ms) {
     if (ms < 0) ms = 0;
@@ -384,8 +418,10 @@
       return {
         id: e.id || uid(),
         startAt: e.startAt || (e.date && e.start ? makeStartAt(e.date, e.start) : new Date().toISOString()),
-        // optional manual end; when empty the end is the next entry's start
+        // optional manual end; for a main entry, empty means "next entry's start"
         endAt: e.endAt && !isNaN(new Date(e.endAt)) ? new Date(e.endAt).toISOString() : "",
+        // an "alongside" entry runs concurrently and is left out of the chain
+        concurrent: !!e.concurrent,
         narration: typeof e.narration === "string" ? e.narration : "",
         category: cat,
         stop: !!e.stop,
@@ -514,18 +550,37 @@
   }
 
   // ---------- derived: entries with end times ----------
+  // Two lanes: the main sequential chain (end = next main entry's start, unless a
+  // manual end is set), and free-floating "alongside" entries that carry their own
+  // explicit start + end and never touch the chain.
   function rowsForDay(dayK) {
     var all = state.entries.slice().sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
+    var mainSeq = all.filter(function (e) { return !e.concurrent; }); // includes stop markers
     var rows = [];
-    for (var i = 0; i < all.length; i++) {
-      var e = all[i];
+
+    for (var i = 0; i < mainSeq.length; i++) {
+      var e = mainSeq[i];
       if (dateKey(new Date(e.startAt)) !== dayK) continue;
-      var next = all[i + 1];
+      var next = mainSeq[i + 1];
       var autoEndAt = next ? next.startAt : null;
-      // a manual end time on the entry wins over the next entry's start
-      var endAt = e.endAt || autoEndAt;
-      rows.push({ entry: e, endAt: endAt, autoEndAt: autoEndAt, hasManualEnd: !!e.endAt, isLast: !next });
+      var endAt = e.endAt || autoEndAt; // a manual end wins over the next entry's start
+      rows.push({
+        entry: e, lane: "main", endAt: endAt, autoEndAt: autoEndAt,
+        hasManualEnd: !!e.endAt, isLast: !next,
+        ongoing: !next && !e.endAt
+      });
     }
+
+    all.filter(function (e) { return e.concurrent; }).forEach(function (e) {
+      if (dateKey(new Date(e.startAt)) !== dayK) return;
+      rows.push({
+        entry: e, lane: "alongside", endAt: e.endAt || null, autoEndAt: null,
+        hasManualEnd: !!e.endAt, isLast: false,
+        ongoing: !e.endAt
+      });
+    });
+
+    rows.sort(function (a, b) { return new Date(a.entry.startAt) - new Date(b.entry.startAt); });
     return rows;
   }
 
@@ -548,35 +603,57 @@
 
   function renderSummary() {
     var box = document.getElementById("summary");
-    var rows = rowsForDay(viewDate).filter(function (r) { return !r.entry.stop; });
-    if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
+    var allRows = rowsForDay(viewDate).filter(function (r) { return !r.entry.stop; });
+    if (!allRows.length) { box.hidden = true; box.innerHTML = ""; return; }
     var now = Date.now();
-    var byCat = {};
-    var total = 0;
-    rows.forEach(function (r) {
-      var start = new Date(r.entry.startAt).getTime();
-      var end = r.endAt ? new Date(r.endAt).getTime() : (r.isLast && viewDate === todayKey() ? now : null);
-      if (end == null) return;
-      var dur = Math.max(0, end - start);
-      total += dur;
-      var c = r.entry.category || "—";
-      byCat[c] = (byCat[c] || 0) + dur;
-    });
-    var cats = Object.keys(byCat).sort(function (a, b) { return byCat[b] - byCat[a]; });
-    var bar = cats.map(function (c) {
-      var pct = total ? (byCat[c] / total * 100) : 0;
+    var isToday = viewDate === todayKey();
+
+    // roll one lane's rows up into { total, byCat } — Option A keeps the lanes apart
+    function tally(rows) {
+      var byCat = {}, total = 0, count = 0;
+      rows.forEach(function (r) {
+        var start = new Date(r.entry.startAt).getTime();
+        var end = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+        if (end == null) { count++; return; }
+        var dur = Math.max(0, end - start);
+        total += dur; count++;
+        var c = r.entry.category || "—";
+        byCat[c] = (byCat[c] || 0) + dur;
+      });
+      return { byCat: byCat, total: total, count: count };
+    }
+    function catChips(byCat) {
+      return Object.keys(byCat).sort(function (a, b) { return byCat[b] - byCat[a]; }).map(function (c) {
+        return '<span class="lg"><span class="dot" style="background:' + catColor(c) + '"></span>' +
+          escapeHtml(c) + " · " + fmtDuration(byCat[c]) + "</span>";
+      }).join("");
+    }
+
+    var main = tally(allRows.filter(function (r) { return r.lane === "main"; }));
+    var along = tally(allRows.filter(function (r) { return r.lane === "alongside"; }));
+
+    var mainCats = Object.keys(main.byCat).sort(function (a, b) { return main.byCat[b] - main.byCat[a]; });
+    var bar = mainCats.map(function (c) {
+      var pct = main.total ? (main.byCat[c] / main.total * 100) : 0;
       return '<span style="width:' + pct.toFixed(2) + '%;background:' + catColor(c) + '"></span>';
     }).join("");
-    var legend = cats.map(function (c) {
-      return '<span class="lg"><span class="dot" style="background:' + catColor(c) + '"></span>' +
-        escapeHtml(c) + " · " + fmtDuration(byCat[c]) + "</span>";
-    }).join("");
+
+    var html =
+      '<div class="summary-total">Tracked <b>' + fmtDuration(main.total) + "</b> across " + main.count +
+      " " + (main.count === 1 ? "entry" : "entries") + "</div>" +
+      (main.total ? '<div class="cat-bar">' + bar + "</div>" : "") +
+      '<div class="cat-legend">' + catChips(main.byCat) + "</div>";
+
+    if (along.count) {
+      html += '<div class="along-summary">' +
+        '<div class="along-head">+ <b>' + fmtDuration(along.total) + "</b> alongside · " + along.count +
+        " " + (along.count === 1 ? "entry" : "entries") + "</div>" +
+        '<div class="cat-legend">' + catChips(along.byCat) + "</div>" +
+      "</div>";
+    }
+
     box.hidden = false;
-    box.innerHTML =
-      '<div class="summary-total">Tracked <b>' + fmtDuration(total) + "</b> across " + rows.length +
-      " " + (rows.length === 1 ? "entry" : "entries") + "</div>" +
-      (total ? '<div class="cat-bar">' + bar + "</div>" : "") +
-      '<div class="cat-legend">' + legend + "</div>";
+    box.innerHTML = html;
   }
 
   function renderTimeline() {
@@ -593,21 +670,24 @@
         return '<li class="stopmark" data-id="' + e.id + '">ended ' + fmtClock(e.startAt) +
           ' · <button type="button" data-act="del-stop">remove</button></li>';
       }
+      var along = r.lane === "alongside";
       var startMs = new Date(e.startAt).getTime();
       var endMs = r.endAt ? new Date(r.endAt).getTime() : null;
-      var ongoing = false, durHtml = "";
+      var live = false, durHtml = "";
       if (endMs != null) {
         durHtml = '<span class="entry-dur' + (r.hasManualEnd ? ' manual" title="end time set manually' : '') +
           '">' + fmtDuration(endMs - startMs) + "</span>";
-      } else if (r.isLast && viewDate === todayKey()) {
-        ongoing = true;
-        durHtml = '<span class="entry-dur ongoing">' + fmtDuration(now - startMs) + " · now</span>";
+      } else if (r.ongoing && viewDate === todayKey()) {
+        live = true;
+        durHtml = '<span class="entry-dur ongoing">' + fmtDuration(now - startMs) +
+          (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : " · now") + "</span>";
       }
-      var timeRange = fmtClock(e.startAt) + (endMs != null ? "–" + fmtClock(r.endAt) : ongoing ? "–now" : "");
-      return '<li class="entry" data-id="' + e.id + '">' +
+      var timeRange = fmtClock(e.startAt) + (endMs != null ? "–" + fmtClock(r.endAt) : live ? "–now" : "");
+      return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
           '<span class="entry-time">' + timeRange + "</span>" +
           '<span class="entry-main">' +
+            (along ? '<span class="lane-tag">∥ alongside</span> ' : "") +
             '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
             (e.category ? '<span class="entry-category">' + escapeHtml(e.category) + "</span>" : "") +
           "</span>" +
@@ -620,6 +700,7 @@
           "</div>" +
           '<div class="field"><label class="lbl">What</label><input type="text" data-f="narration" value="' + escapeHtml(e.narration) + '"></div>' +
           '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" value="' + escapeHtml(e.category) + '"></div>' +
+          '<label class="check-row"><input type="checkbox" data-f="concurrent"' + (e.concurrent ? " checked" : "") + '> Runs alongside other tasks (concurrent)</label>' +
           '<div class="form-actions">' +
             '<button type="button" class="btn btn-primary btn-small" data-act="save">Save</button>' +
             '<button type="button" class="btn btn-ghost btn-small" data-act="cancel">Cancel</button>' +
@@ -631,12 +712,15 @@
   }
 
   // ---------- mutations ----------
-  function addEntry(hhmm, narration, category) {
+  function addEntry(hhmm, narration, category, opts) {
+    opts = opts || {};
     var startAt = makeStartAt(viewDate, hhmm);
+    var endAt = opts.concurrent ? makeEndAt(startAt, opts.endHHMM || "") : "";
     category = category.trim();
     queueMutation(function (s) {
       s.entries.push({
-        id: uid(), startAt: startAt,
+        id: uid(), startAt: startAt, endAt: endAt,
+        concurrent: !!opts.concurrent,
         narration: narration.trim(), category: category, stop: false,
         createdAt: new Date().toISOString()
       });
@@ -657,17 +741,8 @@
         if (e.id !== id) return e;
         var next = Object.assign({}, e);
         if (patch.time) next.startAt = makeStartAt(dateKey(new Date(e.startAt)), patch.time);
-        if ("end" in patch) {
-          if (!patch.end) {
-            next.endAt = "";
-          } else {
-            var sd = new Date(next.startAt), tp = patch.end.split(":");
-            var ed = new Date(sd.getFullYear(), sd.getMonth(), sd.getDate(), +tp[0], +tp[1], 0, 0);
-            // an end at or before the start means it ran past midnight
-            if (ed.getTime() <= sd.getTime()) ed.setDate(ed.getDate() + 1);
-            next.endAt = ed.toISOString();
-          }
-        }
+        if ("end" in patch) next.endAt = makeEndAt(next.startAt, patch.end || "");
+        if ("concurrent" in patch) next.concurrent = !!patch.concurrent;
         if ("narration" in patch) next.narration = patch.narration.trim();
         if ("category" in patch) next.category = patch.category.trim();
         return next;
@@ -678,6 +753,15 @@
   function deleteEntry(id) {
     queueMutation(function (s) {
       s.entries = s.entries.filter(function (e) { return e.id !== id; });
+      return s;
+    });
+  }
+  function endEntryNow(id) {
+    var iso = new Date().toISOString();
+    queueMutation(function (s) {
+      s.entries = s.entries.map(function (e) {
+        return e.id === id ? Object.assign({}, e, { endAt: iso }) : e;
+      });
       return s;
     });
   }
@@ -710,14 +794,34 @@
     }
   });
 
+  var fConcurrent = document.getElementById("f-concurrent");
+  var fEnd = document.getElementById("f-end");
+  var fEndField = document.getElementById("f-end-field");
+  var logBtn = document.getElementById("logBtn");
+  attachTimeInput(fEnd);
+  fConcurrent.addEventListener("change", function () {
+    fEndField.hidden = !fConcurrent.checked;
+    logBtn.textContent = fConcurrent.checked ? "Log alongside" : "Log entry";
+  });
+
   document.getElementById("addForm").addEventListener("submit", function (ev) {
     ev.preventDefault();
     var t = fTime.value.trim() ? normTime(fTime.value) : nowHHMM();
     if (!t) { fTime.value = ""; fTime.focus(); return; }
     fTime.value = t;
     if (!fNarr.value.trim()) { fNarr.focus(); return; }
-    addEntry(t, fNarr.value, fCat.value);
+    var concurrent = fConcurrent.checked;
+    var endHHMM = "";
+    if (concurrent && fEnd.value.trim()) {
+      endHHMM = normTime(fEnd.value);
+      if (!endHHMM) { fEnd.focus(); return; }
+    }
+    addEntry(t, fNarr.value, fCat.value, { concurrent: concurrent, endHHMM: endHHMM });
     fNarr.value = "";
+    fEnd.value = "";
+    fConcurrent.checked = false;
+    fEndField.hidden = true;
+    logBtn.textContent = "Log entry";
     fTime.value = nowHHMM();
     resetAgo();
     hideAc();
@@ -800,6 +904,7 @@
     }
     if (act === "cancel") { editBox.hidden = true; render(); return; }
     if (act === "delete") { if (confirm("Delete this entry?")) deleteEntry(id); return; }
+    if (act === "end-now") { endEntryNow(id); return; }
     if (act === "save") {
       var timeEl = editBox.querySelector('[data-f="time"]');
       var t = normTime(timeEl.value);
@@ -811,6 +916,7 @@
       updateEntry(id, {
         time: t,
         end: endNorm,
+        concurrent: editBox.querySelector('[data-f="concurrent"]').checked,
         narration: editBox.querySelector('[data-f="narration"]').value,
         category: editBox.querySelector('[data-f="category"]').value
       });
