@@ -216,6 +216,8 @@
   .ov-kind.invest { color: var(--good); font-weight: 700; }
   .ov-kind.limit { color: var(--danger); font-weight: 700; }
   .ov-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 2rem 0; }
+  .ov-actions { display: flex; gap: 0.6rem; margin-top: 1.6rem; flex-wrap: wrap; }
+  .ov-actions .btn { flex: 1; min-width: 9rem; }
 
   /* ---------- day summary ---------- */
   .summary { margin-bottom: 1rem; }
@@ -375,7 +377,13 @@
   </div>
 
   <!-- OVERVIEW: at-a-glance day breakdown -->
-  <div id="overviewPage" hidden></div>
+  <div id="overviewPage" hidden>
+    <div id="overviewBody"></div>
+    <div class="ov-actions">
+      <button type="button" class="btn btn-ghost btn-small" id="ovCopy">Copy report for ChatGPT</button>
+      <button type="button" class="btn btn-ghost btn-small" id="ovCsv">Download CSV</button>
+    </div>
+  </div>
 </div>
 
 <!-- sync modal -->
@@ -841,7 +849,7 @@
 
   // ---------- overview page ----------
   function renderOverview() {
-    var box = document.getElementById("overviewPage");
+    var box = document.getElementById("overviewBody");
     var now = Date.now();
     var isToday = viewDate === todayKey();
     var rows = rowsForDay(viewDate).filter(function (r) { return !r.entry.stop; });
@@ -924,6 +932,126 @@
     }).join("");
 
     box.innerHTML = gist + '<div class="ov-section-label">Where your time went</div>' + list;
+  }
+
+  // ---------- day export (CSV + a report to paste into ChatGPT) ----------
+  function dayEntryRows(dayK) {
+    var now = Date.now(), isToday = dayK === todayKey();
+    return rowsForDay(dayK).filter(function (r) { return !r.entry.stop; })
+      .sort(function (a, b) { return new Date(a.entry.startAt) - new Date(b.entry.startAt); })
+      .map(function (r) {
+        var startMs = new Date(r.entry.startAt).getTime();
+        var endMs = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+        return {
+          start: fmtClock(r.entry.startAt),
+          end: endMs == null ? "" : pad(new Date(endMs).getHours()) + ":" + pad(new Date(endMs).getMinutes()),
+          mins: endMs == null ? "" : Math.round((endMs - startMs) / 60000),
+          category: r.entry.category || "",
+          lane: r.lane,
+          concurrent: r.entry.concurrent ? "yes" : "no",
+          narration: r.entry.narration || ""
+        };
+      });
+  }
+  function csvCell(s) {
+    s = String(s == null ? "" : s);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function buildCsv(dayK) {
+    var lines = ["date,start,end,duration_minutes,category,lane,concurrent,activity"];
+    dayEntryRows(dayK).forEach(function (e) {
+      lines.push([dayK, e.start, e.end, e.mins, csvCell(e.category), e.lane, e.concurrent, csvCell(e.narration)].join(","));
+    });
+    return lines.join("\r\n");
+  }
+  function dayCategoryStats(dayK) {
+    var now = Date.now(), isToday = dayK === todayKey();
+    var rows = rowsForDay(dayK).filter(function (r) { return !r.entry.stop; });
+    var wall = 0, along = 0, byCat = {};
+    rows.forEach(function (r) {
+      var s = new Date(r.entry.startAt).getTime();
+      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+      var d = e == null ? 0 : Math.max(0, e - s);
+      if (r.lane === "main") wall += d; else along += d;
+      var c = r.entry.category || "—";
+      byCat[c] = (byCat[c] || 0) + d;
+    });
+    var items = state.categories.map(function (c) {
+      return { cat: c, spent: Math.round((byCat[c] || 0) / 60000), goal: state.goals[c] || 0, kind: goalKind(c) };
+    }).filter(function (x) { return x.spent > 0 || x.goal > 0; });
+    if (byCat["—"]) items.push({ cat: "—", spent: Math.round(byCat["—"] / 60000), goal: 0, kind: "invest", uncat: true });
+    items.sort(function (a, b) { return b.spent - a.spent; });
+    return { wallMin: Math.round(wall / 60000), alongMin: Math.round(along / 60000), items: items };
+  }
+  function buildReport(dayK) {
+    var niceDate = keyToDate(dayK).toLocaleDateString(undefined,
+      { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    var st = dayCategoryStats(dayK);
+    var investG = st.items.filter(function (x) { return !x.uncat && x.kind === "invest" && x.goal > 0; });
+    var limitG = st.items.filter(function (x) { return !x.uncat && x.kind === "limit" && x.goal > 0; });
+    var L = [];
+    L.push("# Time Tracker — " + niceDate);
+    L.push("");
+    L.push("## Summary");
+    L.push("- Main timeline tracked: " + fmtMins(st.wallMin) +
+      (st.alongMin ? " (plus " + fmtMins(st.alongMin) + ' on concurrent "alongside" tasks)' : ""));
+    if (st.items[0]) L.push("- Most time on: " + st.items[0].cat + " (" + fmtMins(st.items[0].spent) + ")");
+    if (investG.length) L.push("- Time goals reached: " +
+      investG.filter(function (x) { return x.spent >= x.goal; }).length + " of " + investG.length);
+    if (limitG.length) L.push("- Limits kept: " +
+      limitG.filter(function (x) { return x.spent <= x.goal; }).length + " of " + limitG.length);
+    L.push("");
+    L.push("## By category");
+    L.push("| Category | Spent | Target | Aim | Status |");
+    L.push("|---|---|---|---|---|");
+    st.items.forEach(function (x) {
+      var aim = x.uncat ? "—" : (x.kind === "invest" ? "spend more" : "spend less");
+      var target = x.goal ? fmtMins(x.goal) + (x.kind === "limit" ? " cap" : "") : "—";
+      var status;
+      if (x.uncat) status = "uncategorised";
+      else if (x.kind === "invest") status = !x.goal ? "no goal" :
+        (x.spent >= x.goal ? "goal met" : Math.round(x.spent / x.goal * 100) + "%, " + fmtMins(x.goal - x.spent) + " to go");
+      else status = !x.goal ? "no cap" :
+        (x.spent < x.goal ? fmtMins(x.goal - x.spent) + " under" :
+          (x.spent === x.goal ? "at cap" : "OVER by " + fmtMins(x.spent - x.goal)));
+      L.push("| " + x.cat + " | " + fmtMins(x.spent) + " | " + target + " | " + aim + " | " + status + " |");
+    });
+    L.push("");
+    L.push("## Timeline");
+    L.push("| Start | End | Duration | Category | Activity | Lane |");
+    L.push("|---|---|---|---|---|---|");
+    dayEntryRows(dayK).forEach(function (e) {
+      L.push("| " + e.start + " | " + (e.end || "(ongoing)") + " | " + (e.mins === "" ? "—" : fmtMins(e.mins)) +
+        " | " + (e.category || "—") + " | " + String(e.narration).replace(/\|/g, "/") + " | " + e.lane + " |");
+    });
+    L.push("");
+    L.push("---");
+    L.push("Please review my day: what went well, what I could have done differently, and what to try tomorrow.");
+    return L.join("\n");
+  }
+  function copyText(text, btn) {
+    var restore = btn.textContent;
+    function done(msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = restore; }, 1600); }
+    function legacy() {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      ta.remove();
+      done(ok ? "Copied ✓" : "Copy failed");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("Copied ✓"); }, legacy);
+    } else legacy();
+  }
+  function downloadFile(name, text, mime) {
+    var blob = new Blob([text], { type: mime + ";charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
   }
 
   function renderSummary() {
@@ -1312,6 +1440,13 @@
   document.getElementById("toGoals").addEventListener("click", goToGoals);
   document.getElementById("toOverview").addEventListener("click", function () { goToOverview(); });
   window.addEventListener("hashchange", applyRoute);
+
+  document.getElementById("ovCopy").addEventListener("click", function () {
+    copyText(buildReport(viewDate), this);
+  });
+  document.getElementById("ovCsv").addEventListener("click", function () {
+    downloadFile("time-tracker-" + viewDate + ".csv", buildCsv(viewDate), "text/csv");
+  });
 
   // ---------- goals page ----------
   var goalsList = document.getElementById("goalsList");
