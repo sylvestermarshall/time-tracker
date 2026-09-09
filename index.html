@@ -178,11 +178,15 @@
     width: 1.7rem; height: 1.7rem; border-radius: 6px; flex-shrink: 0; cursor: grab;
     font-size: 0.85rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
   }
-  .goal-cat { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; word-break: break-word; }
+  .goal-cat { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; }
   .goal-cat .dot { width: 0.7rem; height: 0.7rem; border-radius: 3px; flex-shrink: 0; }
-  .goal-input { width: 6.5rem; flex-shrink: 0; text-align: right; font-family: "JetBrains Mono", monospace; font-weight: 700; }
-  .goal-input.invest { color: var(--good); }
-  .goal-input.limit { color: var(--danger); }
+  .goal-cat-name { min-width: 0; overflow-wrap: break-word; }
+  .goal-row .goal-input {
+    width: 6.5rem; flex: 0 0 6.5rem; text-align: right;
+    font-family: "JetBrains Mono", monospace; font-weight: 700;
+  }
+  .goal-row .goal-input.invest { color: var(--good); }
+  .goal-row .goal-input.limit { color: var(--danger); }
   .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
 
   /* ---------- day summary ---------- */
@@ -766,7 +770,8 @@
       return '<div class="goal-row" data-cat="' + escapeHtml(c) + '" draggable="true">' +
         '<button type="button" class="goal-move" data-act="move" title="Move to the other section">' +
           (k === "invest" ? "↓" : "↑") + "</button>" +
-        '<span class="goal-cat"><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</span>" +
+        '<span class="goal-cat"><span class="dot" style="background:' + catColor(c) + '"></span>' +
+          '<span class="goal-cat-name">' + escapeHtml(c) + "</span></span>" +
         '<input type="text" class="goal-input ' + k + '" inputmode="text" autocomplete="off" placeholder="none" value="' +
           (g ? escapeHtml(fmtMins(g)) : "") + '">' +
       "</div>";
