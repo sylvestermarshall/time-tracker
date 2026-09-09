@@ -187,6 +187,10 @@
   }
   .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
   .entry-main { flex: 1; min-width: 0; }
+  .entry-cat-total {
+    flex-shrink: 0; align-self: center; font-family: "JetBrains Mono", monospace;
+    font-size: 0.95rem; font-weight: 700; white-space: nowrap; text-align: right;
+  }
   .entry-narration { font-size: 0.95rem; font-weight: 700; line-height: 1.35; word-wrap: break-word; color: var(--ink); }
   .entry-category {
     display: inline-block; margin-top: 0.3rem; font-size: 0.72rem; font-weight: 700;
@@ -714,24 +718,39 @@
   function renderTimeline() {
     var ul = document.getElementById("timeline");
     var showMore = document.getElementById("showMore");
-    var rows = rowsForDay(viewDate);
-    if (!rows.length) {
+    var now = Date.now();
+    var isToday = viewDate === todayKey();
+    var allRows = rowsForDay(viewDate);
+    if (!allRows.length) {
       ul.innerHTML = '<li class="empty">Nothing logged for this day yet.</li>';
       showMore.hidden = true;
       return;
     }
-    var hiddenCount = 0;
-    if (route === "home" && rows.length > HOME_PREVIEW) {
-      hiddenCount = rows.length - HOME_PREVIEW;
-      rows = rows.slice(-HOME_PREVIEW); // the most recent few
+
+    function rowDuration(r) {
+      var s = new Date(r.entry.startAt).getTime();
+      var end = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+      return end == null ? 0 : Math.max(0, end - s);
+    }
+    // whole-day time per category, per lane (matches the split-lane summary)
+    var catTotals = {};
+    allRows.forEach(function (r) {
+      if (r.entry.stop || !r.entry.category) return;
+      var k = r.lane + "|" + r.entry.category;
+      catTotals[k] = (catTotals[k] || 0) + rowDuration(r);
+    });
+
+    var rows = allRows, hiddenCount = 0;
+    if (route === "home" && allRows.length > HOME_PREVIEW) {
+      hiddenCount = allRows.length - HOME_PREVIEW;
+      rows = allRows.slice(-HOME_PREVIEW); // the most recent few
     }
     showMore.hidden = route !== "home";
     if (route === "home") {
       showMore.textContent = hiddenCount
-        ? "Show all " + (rows.length + hiddenCount) + " entries →"
+        ? "Show all " + allRows.length + " entries →"
         : "Open full day →";
     }
-    var now = Date.now();
     ul.innerHTML = rows.map(function (r) {
       var e = r.entry;
       if (e.stop) {
@@ -753,6 +772,11 @@
         ? '<span class="t-dur' + (r.hasManualEnd ? " manual" : "") + '"' +
           (r.hasManualEnd ? ' title="end time set manually"' : "") + ">" + durInner + "</span>"
         : '<span class="t-dur muted">—</span>';
+      var catTotal = e.category ? (catTotals[r.lane + "|" + e.category] || 0) : 0;
+      var catTotalHtml = catTotal
+        ? '<span class="entry-cat-total" style="color:' + catColor(e.category) + '" title="Total ' +
+          escapeHtml(e.category) + " on this day\">" + fmtDuration(catTotal) + "</span>"
+        : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
           '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
@@ -760,6 +784,7 @@
             '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
           "</span>" +
+          catTotalHtml +
         "</div>" +
         '<div class="entry-edit" hidden>' +
           '<div class="row">' +
