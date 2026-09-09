@@ -168,19 +168,14 @@
   .entry-time {
     font-family: "JetBrains Mono", monospace; flex-shrink: 0;
     display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15;
-    min-width: 3.1rem;
+    min-width: 3.6rem;
   }
   .entry-time .t-start { font-size: 1.15rem; font-weight: 600; color: var(--ink); }
-  .entry-time .t-end { font-size: 0.7rem; color: var(--ink-faint); margin-top: 0.1rem; }
-  .entry-dur {
-    font-family: "JetBrains Mono", monospace; font-size: 1.05rem; font-weight: 700;
-    color: var(--accent); flex-shrink: 0; white-space: nowrap; margin-left: auto;
-    display: inline-flex; align-items: baseline; gap: 0.2rem;
-  }
-  .entry-dur .now { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-  .entry-dur.manual { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .t-dur { font-size: 0.72rem; font-weight: 600; color: var(--accent); margin-top: 0.15rem; white-space: nowrap; }
+  .t-dur .now { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .t-dur.manual { text-decoration: underline dotted; text-underline-offset: 2px; }
   .dur-stop {
-    margin-left: 0.15rem; border: 0; background: none; color: var(--danger); cursor: pointer;
+    margin-left: 0.2rem; border: 0; background: none; color: var(--danger); cursor: pointer;
     font-size: 0.8rem; line-height: 1; padding: 0;
   }
   .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
@@ -739,25 +734,24 @@
       var along = r.lane === "alongside";
       var startMs = new Date(e.startAt).getTime();
       var endMs = r.endAt ? new Date(r.endAt).getTime() : null;
-      var live = false, durHtml = "";
+      var durInner = "";
       if (endMs != null) {
-        durHtml = '<span class="entry-dur' + (r.hasManualEnd ? ' manual" title="end time set manually' : '') +
-          '">' + fmtDuration(endMs - startMs) + "</span>";
+        durInner = fmtDuration(endMs - startMs);
       } else if (r.ongoing && viewDate === todayKey()) {
-        live = true;
-        durHtml = '<span class="entry-dur ongoing">' + fmtDuration(now - startMs) +
-          (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : '<span class="now">now</span>') + "</span>";
+        durInner = fmtDuration(now - startMs) + ' <span class="now">now</span>' +
+          (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : "");
       }
-      var endLabel = endMs != null ? fmtClock(r.endAt) : (live ? "now" : "—");
+      var durHtml = durInner
+        ? '<span class="t-dur' + (r.hasManualEnd ? " manual" : "") + '"' +
+          (r.hasManualEnd ? ' title="end time set manually"' : "") + ">" + durInner + "</span>"
+        : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
-          '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) +
-            '</span><span class="t-end">' + endLabel + "</span></span>" +
+          '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
           '<span class="entry-main">' +
             '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
           "</span>" +
-          durHtml +
         "</div>" +
         '<div class="entry-edit" hidden>' +
           '<div class="row">' +
@@ -1006,7 +1000,7 @@
 
   // keep the "now" ticking for the ongoing entry
   setInterval(function () {
-    if (viewDate === todayKey() && document.querySelector(".entry-dur.ongoing")) {
+    if (viewDate === todayKey() && document.querySelector(".t-dur .now")) {
       renderSummary(); renderTimeline();
     }
   }, 30000);
