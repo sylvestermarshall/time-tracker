@@ -144,9 +144,9 @@
   .date-label .rel { color: var(--ink-faint); font-weight: 500; font-size: 0.85rem; margin-left: 0.35rem; }
   .daynav input[type="date"] { width: auto; padding: 0.3rem 0.4rem; font-size: 0.8rem; }
 
-  .home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.9rem; }
+  .home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem 0.9rem; margin-bottom: 0.9rem; flex-wrap: wrap; }
   .home-head .date-label { font-weight: 700; font-size: 1rem; }
-  .home-links { display: inline-flex; gap: 0.9rem; flex-shrink: 0; }
+  .home-links { display: inline-flex; gap: 0.9rem; flex-shrink: 0; flex-wrap: wrap; }
   .linkbtn { border: 0; background: none; font: inherit; font-weight: 700; color: var(--accent); cursor: pointer; padding: 0; }
 
   .show-more { width: 100%; margin-top: 0.3rem; }
@@ -157,13 +157,22 @@
     font-family: "JetBrains Mono", monospace; font-size: 0.78rem;
     background: var(--line-soft); padding: 0.05rem 0.3rem; border-radius: 4px;
   }
+  .goals-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .goals-tab {
+    flex: 1; padding: 0.5rem 0.4rem; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface-raised); color: var(--ink-soft); font: inherit; font-weight: 700; cursor: pointer;
+  }
+  .goals-tab.active { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+
   .goal-section { border-radius: 10px; padding: 0.2rem 0.6rem; transition: background 0.12s; }
   .goal-section.drop-target { background: var(--accent-soft); }
-  .goal-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.5rem 0 0.1rem; }
+  .goal-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.7rem 0 0.1rem; }
+  .goal-section-label .dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 3px; margin-right: 0.4rem; }
   .goal-section.invest .goal-section-label { color: var(--good); }
   .goal-section.limit .goal-section-label { color: var(--danger); }
   .goal-section-sub { font-size: 0.78rem; color: var(--ink-faint); margin: 0 0 0.3rem; }
   .goal-section-hint { font-size: 0.82rem; color: var(--ink-faint); padding: 0.6rem 0; }
+  .task-meta { font-weight: 500; font-size: 0.74rem; color: var(--ink-faint); margin-left: 0.5rem; white-space: nowrap; flex-shrink: 0; }
 
   .goal-divider {
     display: flex; align-items: center; gap: 0.7rem; margin: 1rem 0;
@@ -355,6 +364,7 @@
     <span class="home-links">
       <button type="button" class="linkbtn" id="toOverview">Overview</button>
       <button type="button" class="linkbtn" id="toGoals">Goals</button>
+      <button type="button" class="linkbtn" id="toTasks">Tasks</button>
     </span>
   </div>
 
@@ -370,9 +380,8 @@
   <ul class="timeline" id="timeline"></ul>
   <button class="btn btn-ghost show-more" id="showMore" type="button" hidden></button>
 
-  <!-- GOALS: per-category daily targets -->
+  <!-- GOALS: per-category / per-task daily targets -->
   <div id="goalsPage" hidden>
-    <p class="goals-intro">Target time per category, per day. Type hours and minutes — e.g. <code>1h 30m</code>, <code>45m</code>, or <code>1:30</code>.</p>
     <div id="goalsList"></div>
   </div>
 
@@ -430,12 +439,13 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
   var viewDate = todayKey();
-  var route = "home";              // "home" (today + last few entries) or "day" (full day)
+  var route = "home";              // home · day · overview · goals
+  var goalsView = "categories";    // within the goals route: "categories" or "tasks"
   var HOME_PREVIEW = 3;            // entries shown on the home view before "Show all"
 
   // ---------- helpers ----------
@@ -552,7 +562,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {} }; }
 
   function normalizeState(raw) {
     raw = (raw && typeof raw === "object") ? raw : {};
@@ -594,7 +604,18 @@
         if (k && raw.goalKinds[k] === "limit") goalKinds[k] = "limit";
       });
     }
-    return { entries: entries, categories: Object.keys(catSet).sort(), goals: goals, goalKinds: goalKinds };
+    // per-task daily budgets, keyed "category\ntask", in minutes
+    var taskGoals = {};
+    if (raw.taskGoals && typeof raw.taskGoals === "object") {
+      Object.keys(raw.taskGoals).forEach(function (k) {
+        var v = Math.round(+raw.taskGoals[k]);
+        if (k && v > 0) taskGoals[k] = v;
+      });
+    }
+    return {
+      entries: entries, categories: Object.keys(catSet).sort(),
+      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals
+    };
   }
 
   function loadLocalCache() {
@@ -753,7 +774,9 @@
       return /^\d{4}-\d{2}-\d{2}$/.test(p) ? p : todayKey();
     }
     if (h === "goals") {
-      route = "goals";
+      route = "goals"; goalsView = "categories";
+    } else if (h === "tasks") {
+      route = "goals"; goalsView = "tasks";
     } else if (h === "overview" || h.indexOf("overview/") === 0) {
       route = "overview";
       viewDate = datedFrom("overview");
@@ -781,6 +804,7 @@
   function goToDay(dayK) { location.hash = "#day/" + dayK; }
   function goToOverview(dayK) { location.hash = "#overview/" + (dayK || todayKey()); }
   function goToGoals() { location.hash = "#goals"; }
+  function goToTasks() { location.hash = "#tasks"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
   function goHome() {
     if (location.hash) location.hash = "";
@@ -809,15 +833,44 @@
   }
 
   function goalKind(c) { return state.goalKinds[c] === "limit" ? "limit" : "invest"; }
+  function taskKey(cat, task) { return (cat || "—") + "\n" + task; }
+
+  // duration per entry id across all days (same chain rules as rowsForDay)
+  function entryDurations() {
+    var out = {};
+    var all = state.entries.slice().sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
+    var main = all.filter(function (e) { return !e.concurrent; }); // keeps stop markers as boundaries
+    for (var i = 0; i < main.length; i++) {
+      var e = main[i];
+      if (e.stop) continue;
+      var next = main[i + 1];
+      var s = new Date(e.startAt).getTime();
+      var end = e.endAt ? new Date(e.endAt).getTime() : (next ? new Date(next.startAt).getTime() : null);
+      out[e.id] = end == null ? 0 : Math.max(0, end - s);
+    }
+    all.forEach(function (e) {
+      if (e.concurrent && !e.stop) {
+        var s2 = new Date(e.startAt).getTime();
+        out[e.id] = e.endAt ? Math.max(0, new Date(e.endAt).getTime() - s2) : 0;
+      }
+    });
+    return out;
+  }
 
   function renderGoals() {
     document.getElementById("pageTitle").textContent = "Daily goals";
     var list = document.getElementById("goalsList");
+    list.innerHTML =
+      '<div class="goals-tabs">' +
+        '<button type="button" class="goals-tab' + (goalsView === "categories" ? " active" : "") + '" data-view="categories">Categories</button>' +
+        '<button type="button" class="goals-tab' + (goalsView === "tasks" ? " active" : "") + '" data-view="tasks">Tasks</button>' +
+      "</div>" +
+      (goalsView === "tasks" ? taskGoalsHtml() : categoryGoalsHtml());
+  }
+
+  function categoryGoalsHtml() {
     var cats = state.categories.slice().sort(function (a, b) { return a.localeCompare(b); });
-    if (!cats.length) {
-      list.innerHTML = '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
-      return;
-    }
+    if (!cats.length) return '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
 
     function goalRow(c) {
       var g = state.goals[c] || 0, k = goalKind(c);
@@ -837,14 +890,47 @@
         (rows.length ? rows.map(goalRow).join("") : '<div class="goal-section-hint">Drag a category here, or use the ↕ button.</div>') +
       "</div>";
     }
-
     var invest = cats.filter(function (c) { return goalKind(c) === "invest"; });
     var limit = cats.filter(function (c) { return goalKind(c) === "limit"; });
-
-    list.innerHTML =
+    return '<p class="goals-intro">Target time per category, per day — e.g. <code>1h 30m</code>, <code>45m</code>, <code>1:30</code>.</p>' +
       section("invest", "↑ Spend more", "Goals to reach — the closer you get, the better.", invest) +
       '<div class="goal-divider">drag across the line</div>' +
       section("limit", "↓ Spend less", "Caps to stay under — less time here is a win.", limit);
+  }
+
+  function taskGoalsHtml() {
+    var dur = entryDurations();
+    var byCat = {};
+    state.entries.forEach(function (e) {
+      if (e.stop || !e.task) return;
+      var cat = e.category || "—";
+      var bucket = byCat[cat] || (byCat[cat] = {});
+      var t = bucket[e.task] || (bucket[e.task] = { count: 0, ms: 0 });
+      t.count++; t.ms += dur[e.id] || 0;
+    });
+    var cats = Object.keys(byCat).sort(function (a, b) { return a.localeCompare(b); });
+    if (!cats.length) return '<p class="goals-empty">No tasks logged yet.</p>';
+
+    return '<p class="goals-intro">A daily budget for tasks you want to keep tight — usually about being more efficient. Grouped by category, most-used first; type a time on any you care about.</p>' +
+      cats.map(function (cat) {
+        var names = Object.keys(byCat[cat]).sort(function (a, b) {
+          return byCat[cat][b].count - byCat[cat][a].count || a.localeCompare(b);
+        });
+        return '<div class="goal-section">' +
+          '<div class="goal-section-label"><span class="dot" style="background:' + catColor(cat) + '"></span>' + escapeHtml(cat) + "</div>" +
+          names.map(function (tn) {
+            var info = byCat[cat][tn];
+            var g = state.taskGoals[taskKey(cat, tn)] || 0;
+            var mins = Math.round(info.ms / 60000);
+            return '<div class="goal-row" data-cat="' + escapeHtml(cat) + '" data-task="' + escapeHtml(tn) + '">' +
+              '<span class="goal-cat"><span class="goal-cat-name">' + escapeHtml(tn) + "</span>" +
+                '<span class="task-meta">×' + info.count + (mins ? " · " + fmtMins(mins) : "") + "</span></span>" +
+              '<input type="text" class="goal-input limit" inputmode="text" autocomplete="off" placeholder="none" value="' +
+                (g ? escapeHtml(fmtMins(g)) : "") + '">' +
+            "</div>";
+          }).join("") +
+        "</div>";
+      }).join("");
   }
 
   // ---------- overview page ----------
@@ -1017,6 +1103,26 @@
           (x.spent === x.goal ? "at cap" : "OVER by " + fmtMins(x.spent - x.goal)));
       L.push("| " + x.cat + " | " + fmtMins(x.spent) + " | " + target + " | " + aim + " | " + status + " |");
     });
+    var tKeys = Object.keys(state.taskGoals);
+    if (tKeys.length) {
+      var spentByKey = {};
+      dayEntryRows(dayK).forEach(function (e) {
+        if (!e.task) return;
+        var kk = (e.category || "—") + "\n" + e.task;
+        spentByKey[kk] = (spentByKey[kk] || 0) + (e.mins === "" ? 0 : e.mins);
+      });
+      L.push("");
+      L.push("## Task budgets");
+      L.push("| Task | Category | Spent today | Budget/day | Status |");
+      L.push("|---|---|---|---|---|");
+      tKeys.sort().forEach(function (kk) {
+        var p = kk.split("\n"), cat = p[0], task = p.slice(1).join("\n");
+        var budget = state.taskGoals[kk], sp = Math.round(spentByKey[kk] || 0);
+        var status = sp === 0 ? "not done today"
+          : sp <= budget ? fmtMins(budget - sp) + " under" : "OVER by " + fmtMins(sp - budget);
+        L.push("| " + task.replace(/\|/g, "/") + " | " + cat + " | " + fmtMins(sp) + " | " + fmtMins(budget) + " | " + status + " |");
+      });
+    }
     L.push("");
     L.push("## Timeline");
     L.push("| Start | End | Duration | Category | Task | Lane |");
@@ -1269,6 +1375,14 @@
       return s;
     });
   }
+  function setTaskGoal(category, task, mins) {
+    var k = taskKey(category, task);
+    queueMutation(function (s) {
+      s.taskGoals = Object.assign({}, s.taskGoals);
+      if (mins > 0) s.taskGoals[k] = mins; else delete s.taskGoals[k];
+      return s;
+    });
+  }
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
@@ -1451,6 +1565,7 @@
   document.getElementById("showMore").addEventListener("click", function () { goToDay(viewDate); });
   document.getElementById("backHome").addEventListener("click", goHome);
   document.getElementById("toGoals").addEventListener("click", goToGoals);
+  document.getElementById("toTasks").addEventListener("click", goToTasks);
   document.getElementById("toOverview").addEventListener("click", function () { goToOverview(); });
   window.addEventListener("hashchange", applyRoute);
 
@@ -1468,10 +1583,13 @@
     if (!row || ev.target.tagName !== "INPUT") return;
     var mins = parseDuration(ev.target.value);
     ev.target.value = mins ? fmtMins(mins) : "";
-    setGoal(row.dataset.cat, mins);
+    if (row.dataset.task != null) setTaskGoal(row.dataset.cat, row.dataset.task, mins);
+    else setGoal(row.dataset.cat, mins);
   });
-  // tap the ↕ button to flip a category between "spend more" and "spend less"
   goalsList.addEventListener("click", function (ev) {
+    var tab = ev.target.closest(".goals-tab");
+    if (tab) { (tab.dataset.view === "tasks" ? goToTasks : goToGoals)(); return; }
+    // ↕ button flips a category between "spend more" and "spend less"
     var btn = ev.target.closest('[data-act="move"]');
     if (!btn) return;
     var cat = btn.closest(".goal-row").dataset.cat;
