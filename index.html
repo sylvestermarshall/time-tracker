@@ -23,6 +23,8 @@
     --accent-soft-line: #b9d6d2;
     --danger: #9b3b2c;
     --danger-soft: #f1e2de;
+    --good: #1f7a3d;
+    --good-soft: #dcecE1;
     --shadow: 0 1px 2px rgba(20, 35, 48, 0.07), 0 4px 14px rgba(20, 35, 48, 0.06);
   }
   @media (prefers-color-scheme: dark) {
@@ -32,6 +34,7 @@
       --line: #2b3f4d; --line-soft: #223543;
       --accent: #4fbbb3; --accent-ink: #0c1b1a; --accent-soft: #1f3a37; --accent-soft-line: #2f5551;
       --danger: #e28468; --danger-soft: #392722;
+      --good: #5abd77; --good-soft: #1c3626;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.3);
     }
   }
@@ -41,6 +44,7 @@
     --line: #2b3f4d; --line-soft: #223543;
     --accent: #4fbbb3; --accent-ink: #0c1b1a; --accent-soft: #1f3a37; --accent-soft-line: #2f5551;
     --danger: #e28468; --danger-soft: #392722;
+    --good: #5abd77; --good-soft: #1c3626;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.3);
   }
 
@@ -152,11 +156,33 @@
     font-family: "JetBrains Mono", monospace; font-size: 0.78rem;
     background: var(--line-soft); padding: 0.05rem 0.3rem; border-radius: 4px;
   }
-  .goal-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.65rem 0; border-bottom: 1px solid var(--line-soft); }
+  .goal-section { border-radius: 10px; padding: 0.2rem 0.6rem; transition: background 0.12s; }
+  .goal-section.drop-target { background: var(--accent-soft); }
+  .goal-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.5rem 0 0.1rem; }
+  .goal-section.invest .goal-section-label { color: var(--good); }
+  .goal-section.limit .goal-section-label { color: var(--danger); }
+  .goal-section-sub { font-size: 0.78rem; color: var(--ink-faint); margin: 0 0 0.3rem; }
+  .goal-section-hint { font-size: 0.82rem; color: var(--ink-faint); padding: 0.6rem 0; }
+
+  .goal-divider {
+    display: flex; align-items: center; gap: 0.7rem; margin: 1rem 0;
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint);
+  }
+  .goal-divider::before, .goal-divider::after { content: ""; flex: 1; height: 2px; background: var(--line); }
+
+  .goal-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0; border-bottom: 1px solid var(--line-soft); }
   .goal-row:last-child { border-bottom: 0; }
+  .goal-row.dragging { opacity: 0.35; }
+  .goal-move {
+    border: 1px solid var(--line); background: var(--surface-raised); color: var(--ink-soft);
+    width: 1.7rem; height: 1.7rem; border-radius: 6px; flex-shrink: 0; cursor: grab;
+    font-size: 0.85rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  }
   .goal-cat { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; word-break: break-word; }
   .goal-cat .dot { width: 0.7rem; height: 0.7rem; border-radius: 3px; flex-shrink: 0; }
-  .goal-row input { width: 6.5rem; flex-shrink: 0; text-align: right; font-family: "JetBrains Mono", monospace; }
+  .goal-input { width: 6.5rem; flex-shrink: 0; text-align: right; font-family: "JetBrains Mono", monospace; font-weight: 700; }
+  .goal-input.invest { color: var(--good); }
+  .goal-input.limit { color: var(--danger); }
   .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
 
   /* ---------- day summary ---------- */
@@ -358,7 +384,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -480,7 +506,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {} }; }
 
   function normalizeState(raw) {
     raw = (raw && typeof raw === "object") ? raw : {};
@@ -515,7 +541,14 @@
         if (k && v > 0) goals[k] = v;
       });
     }
-    return { entries: entries, categories: Object.keys(catSet).sort(), goals: goals };
+    // "invest" (spend more, green) is the default; only "limit" (spend less, red) is stored
+    var goalKinds = {};
+    if (raw.goalKinds && typeof raw.goalKinds === "object") {
+      Object.keys(raw.goalKinds).forEach(function (k) {
+        if (k && raw.goalKinds[k] === "limit") goalKinds[k] = "limit";
+      });
+    }
+    return { entries: entries, categories: Object.keys(catSet).sort(), goals: goals, goalKinds: goalKinds };
   }
 
   function loadLocalCache() {
@@ -717,6 +750,8 @@
     document.getElementById("pageTitle").textContent = route === "day" ? nice : "Time Tracker";
   }
 
+  function goalKind(c) { return state.goalKinds[c] === "limit" ? "limit" : "invest"; }
+
   function renderGoals() {
     document.getElementById("pageTitle").textContent = "Daily goals";
     var list = document.getElementById("goalsList");
@@ -725,13 +760,32 @@
       list.innerHTML = '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
       return;
     }
-    list.innerHTML = cats.map(function (c) {
-      var g = state.goals[c] || 0;
-      return '<div class="goal-row" data-cat="' + escapeHtml(c) + '">' +
+
+    function goalRow(c) {
+      var g = state.goals[c] || 0, k = goalKind(c);
+      return '<div class="goal-row" data-cat="' + escapeHtml(c) + '" draggable="true">' +
+        '<button type="button" class="goal-move" data-act="move" title="Move to the other section">' +
+          (k === "invest" ? "↓" : "↑") + "</button>" +
         '<span class="goal-cat"><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</span>" +
-        '<input type="text" inputmode="text" autocomplete="off" placeholder="none" value="' + (g ? escapeHtml(fmtMins(g)) : "") + '">' +
+        '<input type="text" class="goal-input ' + k + '" inputmode="text" autocomplete="off" placeholder="none" value="' +
+          (g ? escapeHtml(fmtMins(g)) : "") + '">' +
       "</div>";
-    }).join("");
+    }
+    function section(kind, label, sub, rows) {
+      return '<div class="goal-section ' + kind + '" data-kind="' + kind + '">' +
+        '<div class="goal-section-label">' + label + "</div>" +
+        '<div class="goal-section-sub">' + sub + "</div>" +
+        (rows.length ? rows.map(goalRow).join("") : '<div class="goal-section-hint">Drag a category here, or use the ↕ button.</div>') +
+      "</div>";
+    }
+
+    var invest = cats.filter(function (c) { return goalKind(c) === "invest"; });
+    var limit = cats.filter(function (c) { return goalKind(c) === "limit"; });
+
+    list.innerHTML =
+      section("invest", "↑ Spend more", "Goals to reach — the closer you get, the better.", invest) +
+      '<div class="goal-divider">drag across the line</div>' +
+      section("limit", "↓ Spend less", "Caps to stay under — less time here is a win.", limit);
   }
 
   function renderSummary() {
@@ -939,6 +993,13 @@
       return s;
     });
   }
+  function setGoalKind(category, kind) {
+    queueMutation(function (s) {
+      s.goalKinds = Object.assign({}, s.goalKinds);
+      if (kind === "limit") s.goalKinds[category] = "limit"; else delete s.goalKinds[category];
+      return s;
+    });
+  }
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
@@ -1114,12 +1175,52 @@
   window.addEventListener("hashchange", applyRoute);
 
   // ---------- goals page ----------
-  document.getElementById("goalsList").addEventListener("change", function (ev) {
+  var goalsList = document.getElementById("goalsList");
+  goalsList.addEventListener("change", function (ev) {
     var row = ev.target.closest(".goal-row");
     if (!row || ev.target.tagName !== "INPUT") return;
     var mins = parseDuration(ev.target.value);
     ev.target.value = mins ? fmtMins(mins) : "";
     setGoal(row.dataset.cat, mins);
+  });
+  // tap the ↕ button to flip a category between "spend more" and "spend less"
+  goalsList.addEventListener("click", function (ev) {
+    var btn = ev.target.closest('[data-act="move"]');
+    if (!btn) return;
+    var cat = btn.closest(".goal-row").dataset.cat;
+    setGoalKind(cat, goalKind(cat) === "invest" ? "limit" : "invest");
+  });
+  // drag a category across the divider (desktop)
+  var dragCat = null;
+  goalsList.addEventListener("dragstart", function (ev) {
+    var row = ev.target.closest(".goal-row");
+    if (!row) return;
+    dragCat = row.dataset.cat;
+    ev.dataTransfer.effectAllowed = "move";
+    row.classList.add("dragging");
+  });
+  goalsList.addEventListener("dragover", function (ev) {
+    var sec = ev.target.closest(".goal-section");
+    if (!sec || !dragCat) return;
+    ev.preventDefault();
+    sec.classList.add("drop-target");
+  });
+  goalsList.addEventListener("dragleave", function (ev) {
+    var sec = ev.target.closest(".goal-section");
+    if (sec && !sec.contains(ev.relatedTarget)) sec.classList.remove("drop-target");
+  });
+  goalsList.addEventListener("drop", function (ev) {
+    var sec = ev.target.closest(".goal-section");
+    if (!sec || !dragCat) return;
+    ev.preventDefault();
+    setGoalKind(dragCat, sec.dataset.kind);
+    dragCat = null;
+  });
+  goalsList.addEventListener("dragend", function () {
+    dragCat = null;
+    Array.prototype.forEach.call(goalsList.querySelectorAll(".dragging, .drop-target"), function (el) {
+      el.classList.remove("dragging", "drop-target");
+    });
   });
 
   // keep the "now" ticking for the ongoing entry
