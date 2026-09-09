@@ -265,7 +265,7 @@
     flex-shrink: 0; align-self: center; font-family: "JetBrains Mono", monospace;
     font-size: 0.95rem; font-weight: 700; white-space: nowrap; text-align: right;
   }
-  .entry-narration { font-size: 0.95rem; font-weight: 700; line-height: 1.35; word-wrap: break-word; color: var(--ink); }
+  .entry-task { font-size: 0.95rem; font-weight: 700; line-height: 1.35; word-wrap: break-word; color: var(--ink); }
   .entry-category {
     display: inline-block; margin-top: 0.3rem; font-size: 0.72rem; font-weight: 700;
     border-radius: 999px; padding: 0.14rem 0.55rem; letter-spacing: 0.01em;
@@ -327,8 +327,8 @@
         </div>
       </div>
       <div class="field">
-        <label class="lbl" for="f-narration">What are you doing?</label>
-        <input type="text" id="f-narration" placeholder="e.g. Reviewed pull requests" required>
+        <label class="lbl" for="f-task">Tasks</label>
+        <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required>
       </div>
       <div class="field">
         <label class="lbl" for="f-category">Category</label>
@@ -566,7 +566,7 @@
         endAt: e.endAt && !isNaN(new Date(e.endAt)) ? new Date(e.endAt).toISOString() : "",
         // an "alongside" entry runs concurrently and is left out of the chain
         concurrent: !!e.concurrent,
-        narration: typeof e.narration === "string" ? e.narration : "",
+        task: typeof e.task === "string" ? e.task : (typeof e.narration === "string" ? e.narration : ""),
         category: cat,
         stop: !!e.stop,
         createdAt: e.createdAt || new Date().toISOString()
@@ -942,14 +942,15 @@
       .map(function (r) {
         var startMs = new Date(r.entry.startAt).getTime();
         var endMs = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+        if (endMs != null && endMs < startMs) endMs = null; // guard against a future-dated start
         return {
           start: fmtClock(r.entry.startAt),
           end: endMs == null ? "" : pad(new Date(endMs).getHours()) + ":" + pad(new Date(endMs).getMinutes()),
-          mins: endMs == null ? "" : Math.round((endMs - startMs) / 60000),
+          mins: endMs == null ? "" : Math.max(0, Math.round((endMs - startMs) / 60000)),
           category: r.entry.category || "",
           lane: r.lane,
           concurrent: r.entry.concurrent ? "yes" : "no",
-          narration: r.entry.narration || ""
+          task: r.entry.task || ""
         };
       });
   }
@@ -958,9 +959,9 @@
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   function buildCsv(dayK) {
-    var lines = ["date,start,end,duration_minutes,category,lane,concurrent,activity"];
+    var lines = ["date,start,end,duration_minutes,category,lane,concurrent,task"];
     dayEntryRows(dayK).forEach(function (e) {
-      lines.push([dayK, e.start, e.end, e.mins, csvCell(e.category), e.lane, e.concurrent, csvCell(e.narration)].join(","));
+      lines.push([dayK, e.start, e.end, e.mins, csvCell(e.category), e.lane, e.concurrent, csvCell(e.task)].join(","));
     });
     return lines.join("\r\n");
   }
@@ -1018,11 +1019,11 @@
     });
     L.push("");
     L.push("## Timeline");
-    L.push("| Start | End | Duration | Category | Activity | Lane |");
+    L.push("| Start | End | Duration | Category | Task | Lane |");
     L.push("|---|---|---|---|---|---|");
     dayEntryRows(dayK).forEach(function (e) {
       L.push("| " + e.start + " | " + (e.end || "(ongoing)") + " | " + (e.mins === "" ? "—" : fmtMins(e.mins)) +
-        " | " + (e.category || "—") + " | " + String(e.narration).replace(/\|/g, "/") + " | " + e.lane + " |");
+        " | " + (e.category || "—") + " | " + String(e.task).replace(/\|/g, "/") + " | " + e.lane + " |");
     });
     L.push("");
     L.push("---");
@@ -1175,7 +1176,7 @@
         '<div class="entry-head">' +
           '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
           '<span class="entry-main">' +
-            '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
+            '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
           "</span>" +
           catTotalHtml +
@@ -1187,7 +1188,7 @@
               (along && !e.endAt ? ' data-prefill-now="1"' : "") +
               ' value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
           "</div>" +
-          '<div class="field"><label class="lbl">What</label><input type="text" data-f="narration" value="' + escapeHtml(e.narration) + '"></div>' +
+          '<div class="field"><label class="lbl">Task</label><input type="text" data-f="task" value="' + escapeHtml(e.task) + '"></div>' +
           '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" value="' + escapeHtml(e.category) + '"></div>' +
           '<label class="check-row"><input type="checkbox" data-f="concurrent"' + (e.concurrent ? " checked" : "") + '> Runs alongside other tasks (concurrent)</label>' +
           '<div class="form-actions">' +
@@ -1201,7 +1202,7 @@
   }
 
   // ---------- mutations ----------
-  function addEntry(hhmm, narration, category, opts) {
+  function addEntry(hhmm, task, category, opts) {
     opts = opts || {};
     var startAt = makeStartAt(viewDate, hhmm);
     var endAt = opts.concurrent ? makeEndAt(startAt, opts.endHHMM || "") : "";
@@ -1210,7 +1211,7 @@
       s.entries.push({
         id: uid(), startAt: startAt, endAt: endAt,
         concurrent: !!opts.concurrent,
-        narration: narration.trim(), category: category, stop: false,
+        task: task.trim(), category: category, stop: false,
         createdAt: new Date().toISOString()
       });
       if (category && s.categories.indexOf(category) < 0) s.categories.push(category);
@@ -1220,7 +1221,7 @@
   function addStop(hhmm) {
     var startAt = makeStartAt(viewDate, hhmm);
     queueMutation(function (s) {
-      s.entries.push({ id: uid(), startAt: startAt, narration: "", category: "", stop: true, createdAt: new Date().toISOString() });
+      s.entries.push({ id: uid(), startAt: startAt, task: "", category: "", stop: true, createdAt: new Date().toISOString() });
       return s;
     });
   }
@@ -1232,7 +1233,7 @@
         if (patch.time) next.startAt = makeStartAt(dateKey(new Date(e.startAt)), patch.time);
         if ("end" in patch) next.endAt = makeEndAt(next.startAt, patch.end || "");
         if ("concurrent" in patch) next.concurrent = !!patch.concurrent;
-        if ("narration" in patch) next.narration = patch.narration.trim();
+        if ("task" in patch) next.task = patch.task.trim();
         if ("category" in patch) next.category = patch.category.trim();
         return next;
       });
@@ -1271,7 +1272,7 @@
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
-  var fNarr = document.getElementById("f-narration");
+  var fTask = document.getElementById("f-task");
   var fCat = document.getElementById("f-category");
 
   var agoBtn = document.getElementById("agoBtn");
@@ -1288,12 +1289,12 @@
   // focusing the new-entry time field clears it so you can type fresh 4 digits
   // (the inline edit field keeps its value)
   fTime.addEventListener("focus", function () { fTime.value = ""; });
-  // once a full 4-digit time is in, jump to the narration field automatically
+  // once a full 4-digit time is in, jump to the task field automatically
   fTime.addEventListener("input", function () {
     var digits = fTime.value.replace(/\D/g, "");
     if (digits.length === 4) {
       var t = normTime(digits);
-      if (t) { fTime.value = t; fNarr.focus(); }
+      if (t) { fTime.value = t; fTask.focus(); }
     }
   });
 
@@ -1312,15 +1313,15 @@
     var t = fTime.value.trim() ? normTime(fTime.value) : nowHHMM();
     if (!t) { fTime.value = ""; fTime.focus(); return; }
     fTime.value = t;
-    if (!fNarr.value.trim()) { fNarr.focus(); return; }
+    if (!fTask.value.trim()) { fTask.focus(); return; }
     var concurrent = fConcurrent.checked;
     var endHHMM = "";
     if (concurrent && fEnd.value.trim()) {
       endHHMM = normTime(fEnd.value);
       if (!endHHMM) { fEnd.focus(); return; }
     }
-    addEntry(t, fNarr.value, fCat.value, { concurrent: concurrent, endHHMM: endHHMM });
-    fNarr.value = "";
+    addEntry(t, fTask.value, fCat.value, { concurrent: concurrent, endHHMM: endHHMM });
+    fTask.value = "";
     fEnd.value = "";
     fConcurrent.checked = false;
     fEndField.hidden = true;
@@ -1328,7 +1329,7 @@
     fTime.value = nowHHMM();
     resetAgo();
     hideAc();
-    fNarr.focus();
+    fTask.focus();
   });
 
   document.getElementById("stopBtn").addEventListener("click", function () {
@@ -1430,7 +1431,7 @@
         time: t,
         end: endNorm,
         concurrent: editBox.querySelector('[data-f="concurrent"]').checked,
-        narration: editBox.querySelector('[data-f="narration"]').value,
+        task: editBox.querySelector('[data-f="task"]').value,
         category: editBox.querySelector('[data-f="category"]').value
       });
     }
