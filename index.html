@@ -146,6 +146,7 @@
 
   .home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.9rem; }
   .home-head .date-label { font-weight: 700; font-size: 1rem; }
+  .home-links { display: inline-flex; gap: 0.9rem; flex-shrink: 0; }
   .linkbtn { border: 0; background: none; font: inherit; font-weight: 700; color: var(--accent); cursor: pointer; padding: 0; }
 
   .show-more { width: 100%; margin-top: 0.3rem; }
@@ -188,6 +189,33 @@
   .goal-row .goal-input.invest { color: var(--good); }
   .goal-row .goal-input.limit { color: var(--danger); }
   .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
+
+  /* ---------- overview page ---------- */
+  .ov-gist {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 0.9rem 1rem; margin-bottom: 1.1rem; box-shadow: var(--shadow);
+    font-size: 0.95rem; line-height: 1.5; color: var(--ink-soft);
+  }
+  .ov-gist b { color: var(--ink); }
+  .ov-gist-line { margin-top: 0.35rem; font-size: 0.85rem; }
+  .ov-section-label {
+    font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-faint); margin: 1.1rem 0 0.7rem;
+  }
+  .ov-row { margin-bottom: 1rem; }
+  .ov-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; margin-bottom: 0.3rem; }
+  .ov-row-name { font-weight: 700; display: flex; align-items: center; gap: 0.45rem; min-width: 0; overflow-wrap: anywhere; }
+  .ov-row-name .dot { width: 0.65rem; height: 0.65rem; border-radius: 3px; flex-shrink: 0; }
+  .ov-row-nums { font-family: "JetBrains Mono", monospace; font-size: 0.82rem; color: var(--ink-soft); flex-shrink: 0; white-space: nowrap; }
+  .ov-track { position: relative; height: 0.7rem; background: var(--line-soft); border-radius: 999px; overflow: hidden; }
+  .ov-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px; min-width: 2px; }
+  .ov-goal-tick { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); opacity: 0.6; }
+  .ov-status { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.78rem; margin-top: 0.28rem; color: var(--ink-faint); }
+  .ov-status .good { color: var(--good); font-weight: 700; }
+  .ov-status .bad { color: var(--danger); font-weight: 700; }
+  .ov-kind.invest { color: var(--good); font-weight: 700; }
+  .ov-kind.limit { color: var(--danger); font-weight: 700; }
+  .ov-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 2rem 0; }
 
   /* ---------- day summary ---------- */
   .summary { margin-bottom: 1rem; }
@@ -322,7 +350,10 @@
   <!-- HOME: heading above the recent-entries preview -->
   <div class="home-head" id="homeHead">
     <span class="date-label" id="homeDateLabel"></span>
-    <button type="button" class="linkbtn" id="toGoals">Goals →</button>
+    <span class="home-links">
+      <button type="button" class="linkbtn" id="toOverview">Overview</button>
+      <button type="button" class="linkbtn" id="toGoals">Goals</button>
+    </span>
   </div>
 
   <!-- DAY: full-day view with date navigation -->
@@ -342,6 +373,9 @@
     <p class="goals-intro">Target time per category, per day. Type hours and minutes — e.g. <code>1h 30m</code>, <code>45m</code>, or <code>1:30</code>.</p>
     <div id="goalsList"></div>
   </div>
+
+  <!-- OVERVIEW: at-a-glance day breakdown -->
+  <div id="overviewPage" hidden></div>
 </div>
 
 <!-- sync modal -->
@@ -703,33 +737,43 @@
   }
 
   // ---------- routing ----------
-  // hash "#day[/YYYY-MM-DD]" -> full day, "#goals" -> goals page, else home (today)
+  // "#day[/DATE]" full day · "#overview[/DATE]" day breakdown · "#goals" · else home
   function applyRoute() {
     var h = (location.hash || "").replace(/^#\/?/, "");
+    function datedFrom(prefix) {
+      var p = h.slice(prefix.length).replace(/^\//, "");
+      return /^\d{4}-\d{2}-\d{2}$/.test(p) ? p : todayKey();
+    }
     if (h === "goals") {
       route = "goals";
-    } else if (h.indexOf("day") === 0) {
-      var parts = h.split("/");
+    } else if (h === "overview" || h.indexOf("overview/") === 0) {
+      route = "overview";
+      viewDate = datedFrom("overview");
+    } else if (h === "day" || h.indexOf("day/") === 0) {
       route = "day";
-      viewDate = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || "") ? parts[1] : todayKey();
+      viewDate = datedFrom("day");
     } else {
       route = "home";
       viewDate = todayKey();
     }
-    var isHome = route === "home", isDay = route === "day", isGoals = route === "goals";
+    var isHome = route === "home", isGoals = route === "goals", isOverview = route === "overview";
+    var dated = route === "day" || isOverview;
     document.getElementById("backHome").hidden = isHome;
-    document.getElementById("daynav").hidden = !isDay;
+    document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
     document.getElementById("addPanel").hidden = !isHome;
     document.getElementById("goalsPage").hidden = !isGoals;
-    document.getElementById("timeline").hidden = isGoals;
-    document.getElementById("summary").hidden = isGoals;
+    document.getElementById("overviewPage").hidden = !isOverview;
+    document.getElementById("timeline").hidden = isGoals || isOverview;
+    document.getElementById("summary").hidden = isGoals || isOverview;
     document.getElementById("showMore").hidden = !isHome;
     window.scrollTo(0, 0);
     render();
   }
   function goToDay(dayK) { location.hash = "#day/" + dayK; }
+  function goToOverview(dayK) { location.hash = "#overview/" + (dayK || todayKey()); }
   function goToGoals() { location.hash = "#goals"; }
+  function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
   function goHome() {
     if (location.hash) location.hash = "";
     else applyRoute();
@@ -738,6 +782,7 @@
   // ---------- render ----------
   function render() {
     if (route === "goals") { renderGoals(); return; }
+    if (route === "overview") { renderHeads(); renderOverview(); return; }
     if (route === "home") viewDate = todayKey();
     renderHeads();
     renderSummary();
@@ -751,7 +796,8 @@
     document.getElementById("dateLabel").innerHTML = label;
     document.getElementById("homeDateLabel").innerHTML = label;
     document.getElementById("datePicker").value = viewDate;
-    document.getElementById("pageTitle").textContent = route === "day" ? nice : "Time Tracker";
+    document.getElementById("pageTitle").textContent =
+      route === "day" ? nice : route === "overview" ? "Overview" : "Time Tracker";
   }
 
   function goalKind(c) { return state.goalKinds[c] === "limit" ? "limit" : "invest"; }
@@ -791,6 +837,93 @@
       section("invest", "↑ Spend more", "Goals to reach — the closer you get, the better.", invest) +
       '<div class="goal-divider">drag across the line</div>' +
       section("limit", "↓ Spend less", "Caps to stay under — less time here is a win.", limit);
+  }
+
+  // ---------- overview page ----------
+  function renderOverview() {
+    var box = document.getElementById("overviewPage");
+    var now = Date.now();
+    var isToday = viewDate === todayKey();
+    var rows = rowsForDay(viewDate).filter(function (r) { return !r.entry.stop; });
+
+    function durMs(r) {
+      var s = new Date(r.entry.startAt).getTime();
+      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+      return e == null ? 0 : Math.max(0, e - s);
+    }
+    var wallMs = 0, alongMs = 0, byCat = {};
+    rows.forEach(function (r) {
+      var d = durMs(r);
+      if (r.lane === "main") wallMs += d; else alongMs += d;
+      var c = r.entry.category || "—";
+      byCat[c] = (byCat[c] || 0) + d;
+    });
+
+    var items = state.categories.map(function (c) {
+      return { cat: c, spent: Math.round((byCat[c] || 0) / 60000), goal: state.goals[c] || 0, kind: goalKind(c) };
+    }).filter(function (x) { return x.spent > 0 || x.goal > 0; });
+    if (byCat["—"]) {
+      items.push({ cat: "—", spent: Math.round(byCat["—"] / 60000), goal: 0, kind: "invest", uncat: true });
+    }
+    items.sort(function (a, b) { return b.spent - a.spent; });
+
+    if (!items.length) {
+      box.innerHTML = '<p class="ov-empty">Nothing logged yet for this day.</p>';
+      return;
+    }
+
+    var scale = Math.max.apply(null, [1].concat(items.map(function (x) { return Math.max(x.spent, x.goal); })));
+    var top = items[0];
+    var investG = items.filter(function (x) { return !x.uncat && x.kind === "invest" && x.goal > 0; });
+    var limitG = items.filter(function (x) { return !x.uncat && x.kind === "limit" && x.goal > 0; });
+    var investMet = investG.filter(function (x) { return x.spent >= x.goal; }).length;
+    var limitKept = limitG.filter(function (x) { return x.spent <= x.goal; }).length;
+
+    var gist = '<div class="ov-gist">' +
+      "You’ve tracked <b>" + fmtMins(Math.round(wallMs / 60000)) + "</b>" +
+      (alongMs >= 60000 ? ", plus " + fmtMins(Math.round(alongMs / 60000)) + " alongside," : "") +
+      (isToday ? " so far today." : " on this day.") +
+      '<div class="ov-gist-line">Most time on <b>' + escapeHtml(top.cat) + "</b> · " + fmtMins(top.spent) + ".</div>" +
+      (investG.length || limitG.length
+        ? '<div class="ov-gist-line">' +
+          (investG.length ? "Reached <b>" + investMet + "/" + investG.length + "</b> time goals" : "") +
+          (investG.length && limitG.length ? " · " : "") +
+          (limitG.length ? "under <b>" + limitKept + "/" + limitG.length + "</b> limits" : "") +
+          ".</div>"
+        : "") +
+      "</div>";
+
+    var list = items.map(function (x) {
+      var barColor = x.uncat ? "var(--ink-faint)" : catColor(x.cat);
+      var pctSpent = Math.max(x.spent > 0 ? 3 : 0, Math.min(100, x.spent / scale * 100));
+      var tick = x.goal ? '<span class="ov-goal-tick" style="left:' + Math.min(100, x.goal / scale * 100) + '%"></span>' : "";
+      var nums = fmtMins(x.spent) +
+        (x.goal ? ' <span style="opacity:.55">/ ' + fmtMins(x.goal) + (x.kind === "limit" ? " cap" : "") + "</span>" : "");
+      var status = "", scls = "";
+      if (x.uncat) { status = "uncategorised"; }
+      else if (x.kind === "invest") {
+        if (!x.goal) status = "no goal set";
+        else if (x.spent >= x.goal) { status = "goal met"; scls = "good"; }
+        else status = Math.round(x.spent / x.goal * 100) + "% · " + fmtMins(x.goal - x.spent) + " to go";
+      } else {
+        if (!x.goal) status = "no limit set";
+        else if (x.spent < x.goal) { status = fmtMins(x.goal - x.spent) + " left under limit"; scls = "good"; }
+        else if (x.spent === x.goal) { status = "right at the limit"; scls = "good"; }
+        else { status = "over by " + fmtMins(x.spent - x.goal); scls = "bad"; }
+      }
+      var kindBadge = x.uncat ? "" :
+        '<span class="ov-kind ' + x.kind + '">' + (x.kind === "invest" ? "↑ more" : "↓ less") + "</span>";
+      return '<div class="ov-row">' +
+        '<div class="ov-row-head">' +
+          '<span class="ov-row-name"><span class="dot" style="background:' + barColor + '"></span>' + escapeHtml(x.cat) + "</span>" +
+          '<span class="ov-row-nums">' + nums + "</span>" +
+        "</div>" +
+        '<div class="ov-track"><span class="ov-fill" style="width:' + pctSpent + "%;background:" + barColor + '"></span>' + tick + "</div>" +
+        '<div class="ov-status"><span class="' + scls + '">' + status + "</span>" + kindBadge + "</div>" +
+      "</div>";
+    }).join("");
+
+    box.innerHTML = gist + '<div class="ov-section-label">Where your time went</div>' + list;
   }
 
   function renderSummary() {
@@ -1167,16 +1300,17 @@
   function shiftDay(delta) {
     var d = keyToDate(viewDate);
     d.setDate(d.getDate() + delta);
-    goToDay(dateKey(d));
+    goDated(dateKey(d));
   }
   document.getElementById("prevDay").addEventListener("click", function () { shiftDay(-1); });
   document.getElementById("nextDay").addEventListener("click", function () { shiftDay(1); });
   document.getElementById("datePicker").addEventListener("change", function (ev) {
-    if (ev.target.value) goToDay(ev.target.value);
+    if (ev.target.value) goDated(ev.target.value);
   });
   document.getElementById("showMore").addEventListener("click", function () { goToDay(viewDate); });
   document.getElementById("backHome").addEventListener("click", goHome);
   document.getElementById("toGoals").addEventListener("click", goToGoals);
+  document.getElementById("toOverview").addEventListener("click", function () { goToOverview(); });
   window.addEventListener("hashchange", applyRoute);
 
   // ---------- goals page ----------
@@ -1228,9 +1362,11 @@
     });
   });
 
-  // keep the "now" ticking for the ongoing entry
+  // keep the "now" ticking while an entry is still running
   setInterval(function () {
-    if ((route === "home" || route === "day") && viewDate === todayKey() && document.querySelector(".t-dur .now")) {
+    if (viewDate !== todayKey()) return;
+    if (route === "overview") { renderOverview(); return; }
+    if ((route === "home" || route === "day") && document.querySelector(".t-dur .now")) {
       renderSummary(); renderTimeline();
     }
   }, 30000);
