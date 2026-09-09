@@ -167,16 +167,23 @@
   .entry-head { display: flex; align-items: flex-start; gap: 0.7rem; cursor: pointer; }
   .entry-time {
     font-family: "JetBrains Mono", monospace; flex-shrink: 0;
-    display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15;
-    min-width: 3.6rem;
+    display: flex; flex-direction: column; align-items: stretch; text-align: center;
+    min-width: 4rem; border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
   }
-  .entry-time .t-start { font-size: 1.15rem; font-weight: 600; color: var(--ink); }
-  .t-dur { font-size: 0.72rem; font-weight: 600; color: var(--accent); margin-top: 0.15rem; white-space: nowrap; }
-  .t-dur .now { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-  .t-dur.manual { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .entry-time .t-start {
+    font-size: 1.1rem; font-weight: 600; color: var(--ink);
+    padding: 0.2rem 0.45rem 0.1rem;
+  }
+  .t-dur {
+    font-size: 1rem; font-weight: 700; color: var(--accent-ink); background: var(--accent);
+    padding: 0.18rem 0.45rem; white-space: nowrap; line-height: 1.2;
+  }
+  .t-dur.muted { background: var(--line-soft); color: var(--ink-faint); }
+  .t-dur.manual { box-shadow: inset 0 2px 0 var(--accent-soft-line); }
+  .t-dur .now { display: block; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
   .dur-stop {
-    margin-left: 0.2rem; border: 0; background: none; color: var(--danger); cursor: pointer;
-    font-size: 0.8rem; line-height: 1; padding: 0;
+    margin-left: 0.3rem; border: 0; background: none; color: var(--accent-ink); cursor: pointer;
+    font-size: 0.75rem; line-height: 1; padding: 0; opacity: 0.9;
   }
   .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
   .entry-main { flex: 1; min-width: 0; }
@@ -738,13 +745,14 @@
       if (endMs != null) {
         durInner = fmtDuration(endMs - startMs);
       } else if (r.ongoing && viewDate === todayKey()) {
-        durInner = fmtDuration(now - startMs) + ' <span class="now">now</span>' +
-          (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : "");
+        durInner = fmtDuration(now - startMs) +
+          (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : "") +
+          '<span class="now">now</span>';
       }
       var durHtml = durInner
         ? '<span class="t-dur' + (r.hasManualEnd ? " manual" : "") + '"' +
           (r.hasManualEnd ? ' title="end time set manually"' : "") + ">" + durInner + "</span>"
-        : "";
+        : '<span class="t-dur muted">—</span>';
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
           '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
