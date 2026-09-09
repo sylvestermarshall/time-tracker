@@ -1183,7 +1183,9 @@
         '<div class="entry-edit" hidden>' +
           '<div class="row">' +
             '<div class="field" style="flex:1"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
-            '<div class="field" style="flex:1"><label class="lbl">End time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="end" value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
+            '<div class="field" style="flex:1"><label class="lbl">End time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="end"' +
+              (along && !e.endAt ? ' data-prefill-now="1"' : "") +
+              ' value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
           "</div>" +
           '<div class="field"><label class="lbl">What</label><input type="text" data-f="narration" value="' + escapeHtml(e.narration) + '"></div>' +
           '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" value="' + escapeHtml(e.category) + '"></div>' +
@@ -1399,7 +1401,17 @@
       editBox.hidden = !willOpen;
       if (willOpen) {
         attachTimeInput(editBox.querySelector('[data-f="time"]'));
-        attachTimeInput(editBox.querySelector('[data-f="end"]'));
+        var endEl = editBox.querySelector('[data-f="end"]');
+        attachTimeInput(endEl);
+        // an ongoing alongside entry: default its end to "now" so a quick Save
+        // just closes it; first tap on the field wipes it for a different time
+        if (endEl.dataset.prefillNow === "1" && !endEl.value) {
+          endEl.value = nowHHMM();
+          endEl.addEventListener("focus", function clr() {
+            endEl.value = "";
+            endEl.removeEventListener("focus", clr);
+          });
+        }
       }
       return;
     }
