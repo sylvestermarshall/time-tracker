@@ -85,8 +85,8 @@
     border-radius: 14px; padding: 1.1rem; box-shadow: var(--shadow);
     margin-bottom: 1.4rem;
   }
-  form .row { display: flex; gap: 0.6rem; }
-  form .row > * { min-width: 0; }
+  .row { display: flex; gap: 0.6rem; }
+  .row > * { min-width: 0; }
   .field { margin-bottom: 0.7rem; position: relative; }
   .field:last-child { margin-bottom: 0; }
   label.lbl {
@@ -158,6 +158,7 @@
     padding: 0.1rem 0.45rem; flex-shrink: 0;
   }
   .entry-dur.ongoing { color: var(--accent-ink); background: var(--accent); }
+  .entry-dur.manual { box-shadow: inset 0 0 0 1px var(--accent-soft-line); }
   .entry-main { flex: 1; min-width: 0; }
   .entry-narration { font-size: 0.95rem; line-height: 1.35; word-wrap: break-word; }
   .entry-category {
@@ -383,6 +384,8 @@
       return {
         id: e.id || uid(),
         startAt: e.startAt || (e.date && e.start ? makeStartAt(e.date, e.start) : new Date().toISOString()),
+        // optional manual end; when empty the end is the next entry's start
+        endAt: e.endAt && !isNaN(new Date(e.endAt)) ? new Date(e.endAt).toISOString() : "",
         narration: typeof e.narration === "string" ? e.narration : "",
         category: cat,
         stop: !!e.stop,
@@ -518,9 +521,10 @@
       var e = all[i];
       if (dateKey(new Date(e.startAt)) !== dayK) continue;
       var next = all[i + 1];
-      var endAt = next ? next.startAt : null;
-      var isLast = !next;
-      rows.push({ entry: e, endAt: endAt, isLast: isLast });
+      var autoEndAt = next ? next.startAt : null;
+      // a manual end time on the entry wins over the next entry's start
+      var endAt = e.endAt || autoEndAt;
+      rows.push({ entry: e, endAt: endAt, autoEndAt: autoEndAt, hasManualEnd: !!e.endAt, isLast: !next });
     }
     return rows;
   }
@@ -593,7 +597,8 @@
       var endMs = r.endAt ? new Date(r.endAt).getTime() : null;
       var ongoing = false, durHtml = "";
       if (endMs != null) {
-        durHtml = '<span class="entry-dur">' + fmtDuration(endMs - startMs) + "</span>";
+        durHtml = '<span class="entry-dur' + (r.hasManualEnd ? ' manual" title="end time set manually' : '') +
+          '">' + fmtDuration(endMs - startMs) + "</span>";
       } else if (r.isLast && viewDate === todayKey()) {
         ongoing = true;
         durHtml = '<span class="entry-dur ongoing">' + fmtDuration(now - startMs) + " · now</span>";
@@ -609,7 +614,10 @@
           durHtml +
         "</div>" +
         '<div class="entry-edit" hidden>' +
-          '<div class="field"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
+          '<div class="row">' +
+            '<div class="field" style="flex:1"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
+            '<div class="field" style="flex:1"><label class="lbl">End time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="end" value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
+          "</div>" +
           '<div class="field"><label class="lbl">What</label><input type="text" data-f="narration" value="' + escapeHtml(e.narration) + '"></div>' +
           '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" value="' + escapeHtml(e.category) + '"></div>' +
           '<div class="form-actions">' +
@@ -649,6 +657,17 @@
         if (e.id !== id) return e;
         var next = Object.assign({}, e);
         if (patch.time) next.startAt = makeStartAt(dateKey(new Date(e.startAt)), patch.time);
+        if ("end" in patch) {
+          if (!patch.end) {
+            next.endAt = "";
+          } else {
+            var sd = new Date(next.startAt), tp = patch.end.split(":");
+            var ed = new Date(sd.getFullYear(), sd.getMonth(), sd.getDate(), +tp[0], +tp[1], 0, 0);
+            // an end at or before the start means it ran past midnight
+            if (ed.getTime() <= sd.getTime()) ed.setDate(ed.getDate() + 1);
+            next.endAt = ed.toISOString();
+          }
+        }
         if ("narration" in patch) next.narration = patch.narration.trim();
         if ("category" in patch) next.category = patch.category.trim();
         return next;
@@ -773,7 +792,10 @@
       var willOpen = editBox.hidden;
       document.querySelectorAll(".entry-edit").forEach(function (b) { b.hidden = true; });
       editBox.hidden = !willOpen;
-      if (willOpen) attachTimeInput(editBox.querySelector('[data-f="time"]'));
+      if (willOpen) {
+        attachTimeInput(editBox.querySelector('[data-f="time"]'));
+        attachTimeInput(editBox.querySelector('[data-f="end"]'));
+      }
       return;
     }
     if (act === "cancel") { editBox.hidden = true; render(); return; }
@@ -782,8 +804,13 @@
       var timeEl = editBox.querySelector('[data-f="time"]');
       var t = normTime(timeEl.value);
       if (!t) { timeEl.focus(); return; }
+      var endEl = editBox.querySelector('[data-f="end"]');
+      var endRaw = endEl.value.trim();
+      var endNorm = endRaw ? normTime(endRaw) : "";
+      if (endRaw && !endNorm) { endEl.focus(); return; }
       updateEntry(id, {
         time: t,
+        end: endNorm,
         narration: editBox.querySelector('[data-f="narration"]').value,
         category: editBox.querySelector('[data-f="category"]').value
       });
