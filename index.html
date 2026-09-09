@@ -164,8 +164,14 @@
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
     padding: 0.7rem 0.8rem; margin-bottom: 0.55rem; box-shadow: var(--shadow);
   }
-  .entry-head { display: flex; align-items: baseline; gap: 0.6rem; cursor: pointer; }
-  .entry-time { font-family: "JetBrains Mono", monospace; font-size: 0.82rem; color: var(--ink-soft); flex-shrink: 0; }
+  .entry-head { display: flex; align-items: flex-start; gap: 0.7rem; cursor: pointer; }
+  .entry-time {
+    font-family: "JetBrains Mono", monospace; flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15;
+    min-width: 3.2rem;
+  }
+  .entry-time .t-start { font-size: 1.15rem; font-weight: 600; color: var(--ink); }
+  .entry-time .t-end { font-size: 0.7rem; color: var(--ink-faint); margin-top: 0.1rem; }
   .entry-dur {
     font-family: "JetBrains Mono", monospace; font-size: 0.75rem; font-weight: 600;
     color: var(--accent); background: var(--accent-soft); border-radius: 999px;
@@ -735,10 +741,11 @@
         durHtml = '<span class="entry-dur ongoing">' + fmtDuration(now - startMs) +
           (along ? '<button type="button" class="dur-stop" data-act="end-now" title="End now">■</button>' : " · now") + "</span>";
       }
-      var timeRange = fmtClock(e.startAt) + (endMs != null ? "–" + fmtClock(r.endAt) : live ? "–now" : "");
+      var endLabel = endMs != null ? fmtClock(r.endAt) : (live ? "now" : "—");
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
-          '<span class="entry-time">' + timeRange + "</span>" +
+          '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) +
+            '</span><span class="t-end">' + endLabel + "</span></span>" +
           '<span class="entry-main">' +
             (along ? '<span class="lane-tag">∥ alongside</span> ' : "") +
             '<span class="entry-narration">' + escapeHtml(e.narration || "(no note)") + "</span><br>" +
