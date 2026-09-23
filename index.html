@@ -337,7 +337,9 @@
       </div>
       <div class="field">
         <label class="lbl" for="f-task">Tasks</label>
-        <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required>
+        <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required
+               role="combobox" aria-autocomplete="list" aria-expanded="false">
+        <div class="ac-list" id="taskAc" hidden></div>
       </div>
       <div class="field">
         <label class="lbl" for="f-category">Category</label>
@@ -365,6 +367,7 @@
       <button type="button" class="linkbtn" id="toOverview">Overview</button>
       <button type="button" class="linkbtn" id="toGoals">Goals</button>
       <button type="button" class="linkbtn" id="toTasks">Tasks</button>
+      <button type="button" class="linkbtn" id="toCategories">Categories</button>
     </span>
   </div>
 
@@ -392,6 +395,11 @@
       <button type="button" class="btn btn-ghost btn-small" id="ovCopy">Copy report for ChatGPT</button>
       <button type="button" class="btn btn-ghost btn-small" id="ovCsv">Download CSV</button>
     </div>
+  </div>
+
+  <!-- CATEGORIES: define tasks under each category, for autofill on the log form -->
+  <div id="categoriesPage" hidden>
+    <div id="tasklibList"></div>
   </div>
 </div>
 
@@ -440,7 +448,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, deletedIds: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, deletedIds: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -562,7 +570,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, deletedIds: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, deletedIds: {} }; }
 
   // tombstones so a delete on one device isn't undone by a merge with another
   // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
@@ -632,9 +640,19 @@
         if (k && v > 0) taskGoals[k] = v;
       });
     }
+    // predefined task -> category mapping, used to autofill the category when
+    // logging a known task
+    var taskCatalog = {};
+    if (raw.taskCatalog && typeof raw.taskCatalog === "object") {
+      Object.keys(raw.taskCatalog).forEach(function (k) {
+        var v = raw.taskCatalog[k];
+        if (k && typeof v === "string" && v) { taskCatalog[k] = v; catSet[v] = true; }
+      });
+    }
+
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
-      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, deletedIds: deletedIds
+      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog, deletedIds: deletedIds
     };
   }
 
@@ -671,6 +689,7 @@
       goals: Object.assign({}, a.goals, b.goals),
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
+      taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
       deletedIds: deletedIds
     });
   }
@@ -857,6 +876,8 @@
       route = "goals"; goalsView = "categories";
     } else if (h === "tasks") {
       route = "goals"; goalsView = "tasks";
+    } else if (h === "categories") {
+      route = "categories";
     } else if (h === "overview" || h.indexOf("overview/") === 0) {
       route = "overview";
       viewDate = datedFrom("overview");
@@ -868,6 +889,7 @@
       viewDate = todayKey();
     }
     var isHome = route === "home", isGoals = route === "goals", isOverview = route === "overview";
+    var isCategories = route === "categories";
     var dated = route === "day" || isOverview;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
@@ -875,8 +897,9 @@
     document.getElementById("addPanel").hidden = !isHome;
     document.getElementById("goalsPage").hidden = !isGoals;
     document.getElementById("overviewPage").hidden = !isOverview;
-    document.getElementById("timeline").hidden = isGoals || isOverview;
-    document.getElementById("summary").hidden = isGoals || isOverview;
+    document.getElementById("categoriesPage").hidden = !isCategories;
+    document.getElementById("timeline").hidden = isGoals || isOverview || isCategories;
+    document.getElementById("summary").hidden = isGoals || isOverview || isCategories;
     document.getElementById("showMore").hidden = !isHome;
     window.scrollTo(0, 0);
     render();
@@ -885,6 +908,7 @@
   function goToOverview(dayK) { location.hash = "#overview/" + (dayK || todayKey()); }
   function goToGoals() { location.hash = "#goals"; }
   function goToTasks() { location.hash = "#tasks"; }
+  function goToCategories() { location.hash = "#categories"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
   function goHome() {
     if (location.hash) location.hash = "";
@@ -895,6 +919,7 @@
   function render() {
     if (route === "goals") { renderGoals(); return; }
     if (route === "overview") { renderHeads(); renderOverview(); return; }
+    if (route === "categories") { renderCategories(); return; }
     if (route === "home") viewDate = todayKey();
     renderHeads();
     renderSummary();
@@ -1011,6 +1036,49 @@
           }).join("") +
         "</div>";
       }).join("");
+  }
+
+  // ---------- categories page: task catalog for autofill ----------
+  function renderCategories() {
+    document.getElementById("pageTitle").textContent = "Categories";
+    var box = document.getElementById("tasklibList");
+    var cats = state.categories.slice().sort(function (a, b) { return a.localeCompare(b); });
+    var byCat = {};
+    Object.keys(state.taskCatalog).forEach(function (t) {
+      var c = state.taskCatalog[t];
+      (byCat[c] || (byCat[c] = [])).push(t);
+    });
+
+    var html = '<p class="goals-intro">Define the tasks you do under each category. Start typing one of them in the log form’s Tasks field and it’ll offer it — pick it and the category fills in automatically (you can still edit it).</p>' +
+      '<div class="field">' +
+        '<label class="lbl" for="newCatInput">Add a category</label>' +
+        '<div class="row"><input type="text" id="newCatInput" placeholder="e.g. Work">' +
+          '<button type="button" class="btn btn-ghost btn-small" id="addCatBtn">Add</button></div>' +
+      "</div>";
+
+    if (!cats.length) {
+      html += '<p class="goals-empty">No categories yet — add one above, or log an entry with a category.</p>';
+    } else {
+      html += cats.map(function (c) {
+        var tasks = (byCat[c] || []).slice().sort(function (a, b) { return a.localeCompare(b); });
+        return '<div class="goal-section" data-cat="' + escapeHtml(c) + '">' +
+          '<div class="goal-section-label"><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</div>" +
+          (tasks.length
+            ? tasks.map(function (t) {
+                return '<div class="goal-row" data-task="' + escapeHtml(t) + '">' +
+                  '<span class="goal-cat"><span class="goal-cat-name">' + escapeHtml(t) + "</span></span>" +
+                  '<button type="button" class="btn btn-ghost btn-small" data-act="remove-task">Remove</button>' +
+                "</div>";
+              }).join("")
+            : '<div class="goal-section-hint">No tasks defined yet.</div>') +
+          '<div class="row" style="margin-top:0.5rem;">' +
+            '<input type="text" class="tasklib-new-task" placeholder="Add a task under ' + escapeHtml(c) + '">' +
+            '<button type="button" class="btn btn-ghost btn-small" data-act="add-task">Add</button>' +
+          "</div>" +
+        "</div>";
+      }).join("");
+    }
+    box.innerHTML = html;
   }
 
   // ---------- overview page ----------
@@ -1472,6 +1540,31 @@
       return s;
     });
   }
+  function addCategoryOnly(name) {
+    name = name.trim();
+    if (!name) return;
+    queueMutation(function (s) {
+      if (s.categories.indexOf(name) < 0) s.categories = s.categories.concat([name]);
+      return s;
+    });
+  }
+  function addTaskCatalog(task, category) {
+    task = task.trim(); category = category.trim();
+    if (!task || !category) return;
+    queueMutation(function (s) {
+      s.taskCatalog = Object.assign({}, s.taskCatalog);
+      s.taskCatalog[task] = category;
+      if (s.categories.indexOf(category) < 0) s.categories = s.categories.concat([category]);
+      return s;
+    });
+  }
+  function removeTaskCatalog(task) {
+    queueMutation(function (s) {
+      s.taskCatalog = Object.assign({}, s.taskCatalog);
+      delete s.taskCatalog[task];
+      return s;
+    });
+  }
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
@@ -1532,6 +1625,7 @@
     fTime.value = nowHHMM();
     resetAgo();
     hideAc();
+    hideTaskAc();
     fTask.focus();
   });
 
@@ -1586,6 +1680,60 @@
     ev.preventDefault();
     fCat.value = item.dataset.name;
     hideAc();
+  });
+
+  // task autocomplete, from the task catalog set up on the Categories page —
+  // picking a suggestion autofills its category (still editable afterward)
+  var taskAc = document.getElementById("taskAc");
+  var taskAcActive = -1;
+  function taskAcMatches() {
+    var q = fTask.value.trim().toLowerCase();
+    if (!q) return [];
+    return Object.keys(state.taskCatalog)
+      .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; })
+      .sort(function (a, b) {
+        var aStarts = a.toLowerCase().indexOf(q) === 0, bStarts = b.toLowerCase().indexOf(q) === 0;
+        if (aStarts !== bStarts) return aStarts ? -1 : 1;
+        return a.localeCompare(b);
+      })
+      .slice(0, 8);
+  }
+  function showTaskAc() {
+    var m = taskAcMatches();
+    if (!m.length) { hideTaskAc(); return; }
+    taskAcActive = -1;
+    taskAc.innerHTML = m.map(function (t, i) {
+      var cat = state.taskCatalog[t];
+      return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(t) + '" data-cat="' + escapeHtml(cat) + '">' +
+        escapeHtml(t) + '<span class="cnt">' + escapeHtml(cat) + "</span></div>";
+    }).join("");
+    taskAc.hidden = false;
+    fTask.setAttribute("aria-expanded", "true");
+  }
+  function hideTaskAc() { taskAc.hidden = true; taskAcActive = -1; fTask.setAttribute("aria-expanded", "false"); }
+  function chooseTask(name, cat) {
+    fTask.value = name;
+    if (cat) fCat.value = cat;
+    hideTaskAc();
+  }
+  fTask.addEventListener("input", showTaskAc);
+  fTask.addEventListener("focus", showTaskAc);
+  fTask.addEventListener("blur", function () { setTimeout(hideTaskAc, 120); });
+  fTask.addEventListener("keydown", function (ev) {
+    if (taskAc.hidden) return;
+    var items = taskAc.querySelectorAll(".ac-item");
+    if (ev.key === "ArrowDown") { ev.preventDefault(); taskAcActive = Math.min(taskAcActive + 1, items.length - 1); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); taskAcActive = Math.max(taskAcActive - 1, 0); }
+    else if (ev.key === "Enter" && taskAcActive >= 0) { ev.preventDefault(); chooseTask(items[taskAcActive].dataset.name, items[taskAcActive].dataset.cat); return; }
+    else if (ev.key === "Escape") { hideTaskAc(); return; }
+    else return;
+    items.forEach(function (el, i) { el.classList.toggle("active", i === taskAcActive); });
+  });
+  taskAc.addEventListener("mousedown", function (ev) {
+    var item = ev.target.closest(".ac-item");
+    if (!item) return;
+    ev.preventDefault();
+    chooseTask(item.dataset.name, item.dataset.cat);
   });
 
   // ---------- timeline interactions ----------
@@ -1655,6 +1803,7 @@
   document.getElementById("backHome").addEventListener("click", goHome);
   document.getElementById("toGoals").addEventListener("click", goToGoals);
   document.getElementById("toTasks").addEventListener("click", goToTasks);
+  document.getElementById("toCategories").addEventListener("click", goToCategories);
   document.getElementById("toOverview").addEventListener("click", function () { goToOverview(); });
   window.addEventListener("hashchange", applyRoute);
 
@@ -1715,6 +1864,31 @@
     Array.prototype.forEach.call(goalsList.querySelectorAll(".dragging, .drop-target"), function (el) {
       el.classList.remove("dragging", "drop-target");
     });
+  });
+
+  // ---------- categories page ----------
+  var tasklibList = document.getElementById("tasklibList");
+  tasklibList.addEventListener("click", function (ev) {
+    if (ev.target.id === "addCatBtn") {
+      addCategoryOnly(document.getElementById("newCatInput").value);
+      return;
+    }
+    var addBtn = ev.target.closest('[data-act="add-task"]');
+    if (addBtn) {
+      var sec = addBtn.closest(".goal-section");
+      addTaskCatalog(sec.querySelector(".tasklib-new-task").value, sec.dataset.cat);
+      return;
+    }
+    var rmBtn = ev.target.closest('[data-act="remove-task"]');
+    if (rmBtn) { removeTaskCatalog(rmBtn.closest(".goal-row").dataset.task); return; }
+  });
+  tasklibList.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter") return;
+    if (ev.target.id === "newCatInput") { ev.preventDefault(); addCategoryOnly(ev.target.value); return; }
+    if (ev.target.classList.contains("tasklib-new-task")) {
+      ev.preventDefault();
+      addTaskCatalog(ev.target.value, ev.target.closest(".goal-section").dataset.cat);
+    }
   });
 
   // keep the "now" ticking while an entry is still running
