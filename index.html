@@ -267,19 +267,21 @@
   .compare-legend b { color: var(--ink); }
   .compare-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; text-align: center; }
 
-  /* compare detail modal: gantt track + session list, one block per date */
-  .compare-detail-date { display: flex; align-items: center; justify-content: space-between; margin: 1.1rem 0 0.4rem; }
-  .compare-detail-date:first-child { margin-top: 0; }
-  .compare-detail-date b { font-size: 0.9rem; color: var(--ink); }
-  .compare-detail-date .lg { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; color: var(--ink-soft); }
+  /* compare detail modal: session N of date A paired directly with session N
+     of date B, each with its own mini time-of-day bar */
   .compare-gantt-track { position: relative; height: 1.5rem; background: var(--line-soft); border-radius: var(--radius-control); overflow: hidden; }
   .compare-gantt-bar { position: absolute; top: 0.2rem; bottom: 0.2rem; border-radius: 4px; min-width: 3px; }
+  .compare-gantt-track--mini { height: 0.85rem; }
   .compare-gantt-axis { display: flex; justify-content: space-between; font-size: 0.62rem; color: var(--ink-faint); margin: 0.25rem 0 0.6rem; }
-  .compare-session-list { list-style: none; margin: 0; padding: 0; font-size: 0.82rem; }
-  .compare-session-list li { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid var(--line-soft); }
-  .compare-session-list li:last-child { border-bottom: 0; }
+  .compare-session-pair { margin-bottom: 1.1rem; padding-bottom: 1rem; border-bottom: 1px dashed var(--line); }
+  .compare-session-pair:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+  .compare-session-pair-label { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint); margin-bottom: 0.5rem; }
+  .compare-session-mini { margin-bottom: 0.55rem; }
+  .compare-session-mini:last-child { margin-bottom: 0; }
+  .compare-session-mini-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; margin-bottom: 0.3rem; font-size: 0.82rem; }
   .compare-session-time { font-family: "JetBrains Mono", monospace; color: var(--ink-soft); flex-shrink: 0; white-space: nowrap; }
   .compare-session-task { color: var(--ink); text-align: right; overflow-wrap: anywhere; }
+  .compare-session-nodata { color: var(--ink-faint); font-style: italic; }
 
   /* categories page: a big title per category, divider between categories
      (not between the tasks/add-field inside one) */
@@ -1476,30 +1478,54 @@
       return '<span' + (i === 0 ? "" : i === tickLabels.length - 1 ? ' style="text-align:right;"' : ' style="text-align:center;"') + ">" + label + "</span>";
     }).join("") + "</div>";
   }
-  function compareDetailTrackHtml(dayK, cat, colorVar) {
-    var rows = compareRawIntervals(dayK, cat);
-    var track = '<div class="compare-gantt-track">' + rows.map(function (r) {
-      var left = (r.start / 1440 * 100).toFixed(2), width = Math.max(0.3, (r.end - r.start) / 1440 * 100).toFixed(2);
-      return '<span class="compare-gantt-bar" style="left:' + left + '%;width:' + width + '%;background:' + colorVar + '"></span>';
-    }).join("") + "</div>";
-    var list = !rows.length
-      ? '<p class="compare-empty" style="padding:0.5rem 0;">Nothing logged.</p>'
-      : '<ul class="compare-session-list">' + rows.map(function (r) {
-          return '<li><span class="compare-session-time">' + minutesToClock(r.start) + "–" + (r.ongoing ? "now" : minutesToClock(r.end)) + "</span>" +
-            '<span class="compare-session-task">' + escapeHtml(r.task || "(no task)") + "</span></li>";
-        }).join("") + "</ul>";
-    return track + list;
+  // one session's mini time-of-day bar + start/end/duration/task — or a "No
+  // data" placeholder when this day has no session at this index
+  function compareSessionMiniHtml(rows, index, colorVar) {
+    var r = rows[index];
+    if (!r) {
+      return '<div class="compare-session-mini">' +
+        '<div class="compare-session-mini-head"><span class="compare-session-nodata">No data</span></div>' +
+        '<div class="compare-gantt-track compare-gantt-track--mini"></div>' +
+      "</div>";
+    }
+    var left = (r.start / 1440 * 100).toFixed(2), width = Math.max(0.5, (r.end - r.start) / 1440 * 100).toFixed(2);
+    var endLabel = r.ongoing ? "now" : minutesToClock(r.end);
+    return '<div class="compare-session-mini">' +
+      '<div class="compare-session-mini-head">' +
+        '<span class="compare-session-time">' + minutesToClock(r.start) + "–" + endLabel + " · " + fmtMins(Math.round(r.end - r.start)) + "</span>" +
+        '<span class="compare-session-task">' + escapeHtml(r.task || "(no task)") + "</span>" +
+      "</div>" +
+      '<div class="compare-gantt-track compare-gantt-track--mini">' +
+        '<span class="compare-gantt-bar" style="left:' + left + '%;width:' + width + '%;background:' + colorVar + '"></span>' +
+      "</div>" +
+    "</div>";
   }
   function compareDetailHtml(cat) {
+    var rowsA = compareRawIntervals(compareDateA, cat), rowsB = compareRawIntervals(compareDateB, cat);
     var totalA = compareSeries(compareDateA, cat).totalMin, totalB = compareSeries(compareDateB, cat).totalMin;
+    var maxLen = Math.max(rowsA.length, rowsB.length);
+
+    var pairs;
+    if (!maxLen) {
+      pairs = '<p class="compare-empty">Nothing logged on either day.</p>';
+    } else {
+      pairs = "";
+      for (var i = 0; i < maxLen; i++) {
+        pairs += '<div class="compare-session-pair">' +
+          '<div class="compare-session-pair-label">Session ' + (i + 1) + "</div>" +
+          compareSessionMiniHtml(rowsA, i, "var(--compare-a)") +
+          compareSessionMiniHtml(rowsB, i, "var(--compare-b)") +
+        "</div>";
+      }
+    }
+
     return '<h2>' + iconBadgeHtml(cat) + escapeHtml(cat) + "</h2>" +
-      '<div class="compare-detail-date"><b>' + escapeHtml(niceDateLabel(compareDateA)) + "</b>" +
-        '<span class="lg"><span class="swatch a"></span>' + fmtMins(totalA) + "</span></div>" +
-      compareDetailTrackHtml(compareDateA, cat, "var(--compare-a)") +
-      '<div class="compare-detail-date"><b>' + escapeHtml(niceDateLabel(compareDateB)) + "</b>" +
-        '<span class="lg"><span class="swatch b"></span>' + fmtMins(totalB) + "</span></div>" +
-      compareDetailTrackHtml(compareDateB, cat, "var(--compare-b)") +
-      compareGanttAxisHtml();
+      '<div class="compare-legend" style="margin-top:0;margin-bottom:1.1rem;">' +
+        '<span class="lg"><span class="swatch a"></span><b>' + escapeHtml(niceDateLabel(compareDateA)) + "</b> · " + fmtMins(totalA) + "</span>" +
+        '<span class="lg"><span class="swatch b"></span><b>' + escapeHtml(niceDateLabel(compareDateB)) + "</b> · " + fmtMins(totalB) + "</span>" +
+      "</div>" +
+      pairs +
+      (maxLen ? compareGanttAxisHtml() : "");
   }
   function renderCompare() {
     document.getElementById("pageTitle").textContent = "Compare";
