@@ -1062,11 +1062,18 @@
       html += cats.map(function (c) {
         var tasks = (byCat[c] || []).slice().sort(function (a, b) { return a.localeCompare(b); });
         return '<div class="goal-section" data-cat="' + escapeHtml(c) + '">' +
-          '<div class="goal-section-label"><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</div>" +
+          '<div class="goal-section-label" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">' +
+            '<span><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</span>" +
+            '<span style="display:flex;gap:0.4rem;flex-shrink:0;">' +
+              '<button type="button" class="btn btn-ghost btn-small" data-act="rename-cat">Rename</button>' +
+              '<button type="button" class="btn btn-ghost btn-small" data-act="delete-cat">Delete</button>' +
+            "</span>" +
+          "</div>" +
           (tasks.length
             ? tasks.map(function (t) {
                 return '<div class="goal-row" data-task="' + escapeHtml(t) + '">' +
                   '<span class="goal-cat"><span class="goal-cat-name">' + escapeHtml(t) + "</span></span>" +
+                  '<button type="button" class="btn btn-ghost btn-small" data-act="edit-task">Edit</button>' +
                   '<button type="button" class="btn btn-ghost btn-small" data-act="remove-task">Remove</button>' +
                 "</div>";
               }).join("")
@@ -1565,6 +1572,61 @@
       return s;
     });
   }
+  function renameTaskCatalog(oldTask, newTask) {
+    oldTask = oldTask.trim(); newTask = newTask.trim();
+    if (!newTask || newTask === oldTask) return;
+    queueMutation(function (s) {
+      s.taskCatalog = Object.assign({}, s.taskCatalog);
+      var cat = s.taskCatalog[oldTask];
+      delete s.taskCatalog[oldTask];
+      s.taskCatalog[newTask] = cat;
+      return s;
+    });
+  }
+  // renames a category everywhere it's referenced: the category list, logged
+  // entries, goals, task budgets, and the task catalog
+  function renameCategory(oldName, newName) {
+    oldName = oldName.trim(); newName = newName.trim();
+    if (!newName || newName === oldName) return;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.categories = s.categories.map(function (c) { return c === oldName ? newName : c; });
+      s.entries = s.entries.map(function (e) {
+        return e.category === oldName ? Object.assign({}, e, { category: newName, updatedAt: now }) : e;
+      });
+      s.goals = Object.assign({}, s.goals);
+      if (oldName in s.goals) { s.goals[newName] = s.goals[oldName]; delete s.goals[oldName]; }
+      s.goalKinds = Object.assign({}, s.goalKinds);
+      if (oldName in s.goalKinds) { s.goalKinds[newName] = s.goalKinds[oldName]; delete s.goalKinds[oldName]; }
+      var newTaskGoals = {};
+      Object.keys(s.taskGoals).forEach(function (k) {
+        var p = k.split("\n"), kc = p[0], kt = p.slice(1).join("\n");
+        newTaskGoals[(kc === oldName ? newName : kc) + "\n" + kt] = s.taskGoals[k];
+      });
+      s.taskGoals = newTaskGoals;
+      var newCatalog = {};
+      Object.keys(s.taskCatalog).forEach(function (t) {
+        newCatalog[t] = s.taskCatalog[t] === oldName ? newName : s.taskCatalog[t];
+      });
+      s.taskCatalog = newCatalog;
+      return s;
+    });
+  }
+  // removes a category from the list and its task catalog entries; entries
+  // already logged under it keep the category text as-is
+  function deleteCategory(name) {
+    queueMutation(function (s) {
+      s.categories = s.categories.filter(function (c) { return c !== name; });
+      var newCatalog = {};
+      Object.keys(s.taskCatalog).forEach(function (t) {
+        if (s.taskCatalog[t] !== name) newCatalog[t] = s.taskCatalog[t];
+      });
+      s.taskCatalog = newCatalog;
+      s.goals = Object.assign({}, s.goals); delete s.goals[name];
+      s.goalKinds = Object.assign({}, s.goalKinds); delete s.goalKinds[name];
+      return s;
+    });
+  }
 
   // ---------- add form ----------
   var fTime = document.getElementById("f-time");
@@ -1881,6 +1943,29 @@
     }
     var rmBtn = ev.target.closest('[data-act="remove-task"]');
     if (rmBtn) { removeTaskCatalog(rmBtn.closest(".goal-row").dataset.task); return; }
+    var editBtn = ev.target.closest('[data-act="edit-task"]');
+    if (editBtn) {
+      var oldTask = editBtn.closest(".goal-row").dataset.task;
+      var newTask = prompt("Edit task", oldTask);
+      if (newTask != null) renameTaskCatalog(oldTask, newTask);
+      return;
+    }
+    var renameCatBtn = ev.target.closest('[data-act="rename-cat"]');
+    if (renameCatBtn) {
+      var oldName = renameCatBtn.closest(".goal-section").dataset.cat;
+      var newName = prompt("Rename category", oldName);
+      if (newName != null) renameCategory(oldName, newName);
+      return;
+    }
+    var deleteCatBtn = ev.target.closest('[data-act="delete-cat"]');
+    if (deleteCatBtn) {
+      var delName = deleteCatBtn.closest(".goal-section").dataset.cat;
+      if (confirm('Delete the "' + delName + '" category? Its catalog tasks and goal settings will be cleared. ' +
+        "Already-logged entries won't change, so it may still show up until you edit those.")) {
+        deleteCategory(delName);
+      }
+      return;
+    }
   });
   tasklibList.addEventListener("keydown", function (ev) {
     if (ev.key !== "Enter") return;
