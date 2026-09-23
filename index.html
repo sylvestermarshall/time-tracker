@@ -656,14 +656,13 @@
   // ---------- state ----------
   function emptyState() {
     return {
-      entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {},
+      entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {},
       deletedIds: {},
       deletedCategories: {}, categoryRevivals: {},
       deletedTaskCatalog: {}, taskCatalogRevivals: {},
       deletedGoals: {}, goalRevivals: {},
       deletedGoalKinds: {}, goalKindRevivals: {},
-      deletedTaskGoals: {}, taskGoalRevivals: {},
-      deletedArchivedCategories: {}, archivedCategoryRevivals: {}
+      deletedTaskGoals: {}, taskGoalRevivals: {}
     };
   }
 
@@ -721,15 +720,12 @@
     var goalKindRevivals = parseTimestamps(raw.goalKindRevivals, false);
     var deletedTaskGoals = parseTimestamps(raw.deletedTaskGoals, true);
     var taskGoalRevivals = parseTimestamps(raw.taskGoalRevivals, false);
-    var deletedArchivedCategories = parseTimestamps(raw.deletedArchivedCategories, true);
-    var archivedCategoryRevivals = parseTimestamps(raw.archivedCategoryRevivals, false);
 
     function categoryAllowed(name) { return tombstoneAllowed(deletedCategories, categoryRevivals, name); }
     function taskCatalogAllowed(task) { return tombstoneAllowed(deletedTaskCatalog, taskCatalogRevivals, task); }
     function goalAllowed(cat) { return tombstoneAllowed(deletedGoals, goalRevivals, cat); }
     function goalKindAllowed(cat) { return tombstoneAllowed(deletedGoalKinds, goalKindRevivals, cat); }
     function taskGoalAllowed(k) { return tombstoneAllowed(deletedTaskGoals, taskGoalRevivals, k); }
-    function archivedAllowed(name) { return tombstoneAllowed(deletedArchivedCategories, archivedCategoryRevivals, name); }
 
     var entries = (Array.isArray(raw.entries) ? raw.entries : []).map(function (e) {
       // `type` is the old field name, kept here so existing data still loads
@@ -798,25 +794,15 @@
       });
     }
 
-    // categories hidden from new-entry autofill / goal-setting but kept intact
-    // for history — set via "Archive" on the Categories page
-    var archivedCategories = {};
-    if (raw.archivedCategories && typeof raw.archivedCategories === "object") {
-      Object.keys(raw.archivedCategories).forEach(function (k) {
-        if (k && raw.archivedCategories[k] && archivedAllowed(k)) archivedCategories[k] = true;
-      });
-    }
-
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
-      archivedCategories: archivedCategories, deletedIds: deletedIds,
+      deletedIds: deletedIds,
       deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
-      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
-      deletedArchivedCategories: deletedArchivedCategories, archivedCategoryRevivals: archivedCategoryRevivals
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals
     };
   }
 
@@ -844,8 +830,6 @@
     var goalKindRevivals = mergeTimestamps(a.goalKindRevivals, b.goalKindRevivals);
     var deletedTaskGoals = mergeTimestamps(a.deletedTaskGoals, b.deletedTaskGoals);
     var taskGoalRevivals = mergeTimestamps(a.taskGoalRevivals, b.taskGoalRevivals);
-    var deletedArchivedCategories = mergeTimestamps(a.deletedArchivedCategories, b.deletedArchivedCategories);
-    var archivedCategoryRevivals = mergeTimestamps(a.archivedCategoryRevivals, b.archivedCategoryRevivals);
 
     var byId = {};
     (a.entries || []).concat(b.entries || []).forEach(function (e) {
@@ -861,13 +845,11 @@
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
-      archivedCategories: Object.assign({}, a.archivedCategories, b.archivedCategories),
       deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
-      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
-      deletedArchivedCategories: deletedArchivedCategories, archivedCategoryRevivals: archivedCategoryRevivals
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals
     });
   }
 
@@ -1121,9 +1103,12 @@
 
   function goalKind(c) { return state.goalKinds[c] === "limit" ? "limit" : "invest"; }
   function taskKey(cat, task) { return (cat || "—") + "\n" + task; }
-  function isArchived(c) { return !!state.archivedCategories[c]; }
-  function activeCategories() { return state.categories.filter(function (c) { return !isArchived(c); }); }
-  function categoryHasEntries(c) { return state.entries.some(function (e) { return e.category === c; }); }
+  // a category deleteCategory() relabeled onto old entries ("Name (deleted)")
+  // is a historical label, not something to manage — keep it out of anywhere
+  // you'd pick or configure a category, but let history-facing views
+  // (Overview, Tasks budgets, reports) show it like any other category
+  function isDeletedLabel(c) { return / \(deleted\)$/.test(c); }
+  function manageableCategories() { return state.categories.filter(function (c) { return !isDeletedLabel(c); }); }
 
   // duration per entry id across all days (same chain rules as rowsForDay)
   function entryDurations() {
@@ -1159,7 +1144,7 @@
   }
 
   function categoryGoalsHtml() {
-    var cats = activeCategories().sort(function (a, b) { return a.localeCompare(b); });
+    var cats = manageableCategories().sort(function (a, b) { return a.localeCompare(b); });
     if (!cats.length) return '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
 
     function goalRow(c) {
@@ -1227,8 +1212,7 @@
   function renderCategories() {
     document.getElementById("pageTitle").textContent = "Categories";
     var box = document.getElementById("tasklibList");
-    var cats = activeCategories().sort(function (a, b) { return a.localeCompare(b); });
-    var archived = Object.keys(state.archivedCategories).sort(function (a, b) { return a.localeCompare(b); });
+    var cats = manageableCategories().sort(function (a, b) { return a.localeCompare(b); });
     var byCat = {};
     Object.keys(state.taskCatalog).forEach(function (t) {
       var c = state.taskCatalog[t];
@@ -1243,19 +1227,16 @@
       "</div>";
 
     if (!cats.length) {
-      html += '<p class="goals-empty">No active categories — add one above, or log an entry with a category.</p>';
+      html += '<p class="goals-empty">No categories yet — add one above, or log an entry with a category.</p>';
     } else {
       html += cats.map(function (c) {
         var tasks = (byCat[c] || []).slice().sort(function (a, b) { return a.localeCompare(b); });
-        var removeBtn = categoryHasEntries(c)
-          ? '<button type="button" class="btn btn-ghost btn-small" data-act="archive-cat">Archive</button>'
-          : '<button type="button" class="btn btn-ghost btn-small" data-act="delete-cat">Delete</button>';
         return '<div class="goal-section" data-cat="' + escapeHtml(c) + '">' +
           '<div class="goal-section-label" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">' +
             '<span>' + iconBadgeHtml(c) + escapeHtml(c) + "</span>" +
             '<span style="display:flex;gap:0.4rem;flex-shrink:0;">' +
               '<button type="button" class="btn btn-ghost btn-small" data-act="rename-cat">Rename</button>' +
-              removeBtn +
+              '<button type="button" class="btn btn-ghost btn-small" data-act="delete-cat">Delete</button>' +
             "</span>" +
           "</div>" +
           (tasks.length
@@ -1273,20 +1254,6 @@
           "</div>" +
         "</div>";
       }).join("");
-    }
-
-    if (archived.length) {
-      html += '<div class="goal-section">' +
-        '<div class="goal-section-label" style="font-size:1rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-faint);">Archived</div>' +
-        '<div class="goal-section-sub">Hidden from autofill and goals, but their history is untouched.</div>' +
-        archived.map(function (c) {
-          return '<div class="goal-row" data-cat="' + escapeHtml(c) + '">' +
-            '<span class="goal-cat">' + iconBadgeHtml(c) +
-              '<span class="goal-cat-name">' + escapeHtml(c) + "</span></span>" +
-            '<button type="button" class="btn btn-ghost btn-small" data-act="unarchive-cat">Unarchive</button>' +
-          "</div>";
-        }).join("") +
-      "</div>";
     }
     box.innerHTML = html;
   }
@@ -1867,12 +1834,19 @@
       return s;
     });
   }
-  // removes a category with no history from the list and its task catalog
-  // entries; only offered on the Categories page when nothing is logged under it
+  // removes a category from the list and its task catalog entries. Any
+  // already-logged entries under it are relabeled "<name> (deleted)" rather
+  // than left under the bare name — that keeps their history intact while
+  // making sure the deleted name doesn't come right back into state.categories
+  // via those entries the next time normalizeState runs
   function deleteCategory(name) {
     var iso = new Date().toISOString();
+    var deletedLabel = name + " (deleted)";
     queueMutation(function (s) {
       s.categories = s.categories.filter(function (c) { return c !== name; });
+      s.entries = s.entries.map(function (e) {
+        return e.category === name ? Object.assign({}, e, { category: deletedLabel, updatedAt: iso }) : e;
+      });
       var newCatalog = {};
       Object.keys(s.taskCatalog).forEach(function (t) {
         if (s.taskCatalog[t] !== name) newCatalog[t] = s.taskCatalog[t];
@@ -1880,26 +1854,10 @@
       s.taskCatalog = newCatalog;
       s.goals = Object.assign({}, s.goals); delete s.goals[name];
       s.goalKinds = Object.assign({}, s.goalKinds); delete s.goalKinds[name];
-      s.archivedCategories = Object.assign({}, s.archivedCategories); delete s.archivedCategories[name];
       // tombstone so this delete survives the pull-and-merge that runs before
       // every sync push, even if the gist still has the pre-delete category
       s.deletedCategories = Object.assign({}, s.deletedCategories);
       s.deletedCategories[name] = iso;
-      return s;
-    });
-  }
-  // hides a category (and its catalog tasks) from autofill and goal-setting
-  // without touching its history — offered instead of Delete once a category
-  // has logged entries, so past reports keep showing it
-  function archiveCategory(name) {
-    queueMutation(function (s) {
-      setTombstoned(s, "archivedCategories", "deletedArchivedCategories", "archivedCategoryRevivals", name, true);
-      return s;
-    });
-  }
-  function unarchiveCategory(name) {
-    queueMutation(function (s) {
-      setTombstoned(s, "archivedCategories", "deletedArchivedCategories", "archivedCategoryRevivals", name, undefined);
       return s;
     });
   }
@@ -1978,7 +1936,7 @@
     var q = fCat.value.trim().toLowerCase();
     var counts = {};
     state.entries.forEach(function (e) { if (e.category) counts[e.category] = (counts[e.category] || 0) + 1; });
-    return activeCategories()
+    return manageableCategories()
       .filter(function (c) { return !q || c.toLowerCase().indexOf(q) >= 0; })
       .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); })
       .slice(0, 8)
@@ -2028,7 +1986,7 @@
     var q = fTask.value.trim().toLowerCase();
     if (!q) return [];
     return Object.keys(state.taskCatalog)
-      .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0 && !isArchived(state.taskCatalog[t]); })
+      .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; })
       .sort(function (a, b) {
         var aStarts = a.toLowerCase().indexOf(q) === 0, bStarts = b.toLowerCase().indexOf(q) === 0;
         if (aStarts !== bStarts) return aStarts ? -1 : 1;
@@ -2251,22 +2209,12 @@
     var deleteCatBtn = ev.target.closest('[data-act="delete-cat"]');
     if (deleteCatBtn) {
       var delName = deleteCatBtn.closest(".goal-section").dataset.cat;
-      if (confirm('Delete the "' + delName + '" category? Nothing is logged under it, so this removes it completely.')) {
+      if (confirm('Delete the "' + delName + '" category? Its catalog tasks and goal settings will be cleared. ' +
+        'Entries already logged under it are kept, relabeled "' + delName + ' (deleted)" so your history stays intact.')) {
         deleteCategory(delName);
       }
       return;
     }
-    var archiveBtn = ev.target.closest('[data-act="archive-cat"]');
-    if (archiveBtn) {
-      var archName = archiveBtn.closest(".goal-section").dataset.cat;
-      if (confirm('Archive "' + archName + '"? It disappears from new-entry autofill and goal-setting, ' +
-        "but its logged history stays exactly as-is — you can unarchive it anytime.")) {
-        archiveCategory(archName);
-      }
-      return;
-    }
-    var unarchiveBtn = ev.target.closest('[data-act="unarchive-cat"]');
-    if (unarchiveBtn) { unarchiveCategory(unarchiveBtn.closest(".goal-row").dataset.cat); return; }
   });
   tasklibList.addEventListener("keydown", function (ev) {
     if (ev.key !== "Enter") return;
