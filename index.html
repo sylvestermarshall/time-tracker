@@ -371,6 +371,20 @@
     display: inline-block; margin-top: 0.3rem; font-size: 0.72rem; font-weight: 700;
     border-radius: 999px; padding: 0.14rem 0.55rem; letter-spacing: 0.01em;
   }
+  .entry-focus { margin-top: 0.3rem; font-size: 0.74rem; color: var(--ink-faint); }
+
+  /* focus toggle: which of 2+ simultaneously-running tasks has attention */
+  .focus-toggle {
+    display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.6rem;
+    padding: 0.4rem; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--shadow-soft);
+  }
+  .focus-pill {
+    flex: 1 1 auto; min-width: 0; border: 1px solid var(--line); background: var(--surface-raised);
+    color: var(--ink-soft); font: inherit; font-weight: 600; font-size: 0.82rem;
+    border-radius: var(--radius-pill); padding: 0.45rem 0.8rem; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .focus-pill.active { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .entry-edit { margin-top: 0.7rem; padding-top: 0.7rem; border-top: 1px solid var(--line-soft); }
   .entry-edit[hidden] { display: none; }
   .entry-edit .form-actions { margin-top: 0.7rem; }
@@ -747,7 +761,8 @@
       deletedTaskCatalog: {}, taskCatalogRevivals: {},
       deletedGoals: {}, goalRevivals: {},
       deletedGoalKinds: {}, goalKindRevivals: {},
-      deletedTaskGoals: {}, taskGoalRevivals: {}
+      deletedTaskGoals: {}, taskGoalRevivals: {},
+      focusSwitches: []
     };
   }
 
@@ -879,6 +894,15 @@
       });
     }
 
+    // which entry had "focus" when 2+ were running at once — append-only log,
+    // never pruned by entry existence here (that's a read-time concern, see
+    // computeFocusSplit) so a switch that syncs in before its entry does isn't
+    // lost forever
+    var focusSwitches = (Array.isArray(raw.focusSwitches) ? raw.focusSwitches : [])
+      .filter(function (s) { return s && s.id && s.entryId && s.at && !isNaN(new Date(s.at)); })
+      .map(function (s) { return { id: s.id, entryId: s.entryId, at: new Date(s.at).toISOString() }; })
+      .sort(function (a, b) { return new Date(a.at) - new Date(b.at); });
+
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
@@ -887,7 +911,8 @@
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
-      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      focusSwitches: focusSwitches
     };
   }
 
@@ -923,6 +948,12 @@
     });
     var entries = Object.keys(byId).map(function (k) { return byId[k]; });
 
+    // append-only: unlike entries, a given id's content never changes, so this
+    // is a plain union with no updatedAt tie-break to worry about
+    var switchesById = {};
+    (a.focusSwitches || []).concat(b.focusSwitches || []).forEach(function (s) { switchesById[s.id] = s; });
+    var focusSwitches = Object.keys(switchesById).map(function (k) { return switchesById[k]; });
+
     return normalizeState({
       entries: entries,
       categories: uniq((a.categories || []).concat(b.categories || [])),
@@ -934,7 +965,8 @@
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
-      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      focusSwitches: focusSwitches
     });
   }
 
@@ -1106,6 +1138,93 @@
 
     rows.sort(function (a, b) { return new Date(a.entry.startAt) - new Date(b.entry.startAt); });
     return rows;
+  }
+
+  // per-entry "actual focus minutes" for a day, given whichever entries
+  // overlapped and the global focusSwitches log — supplementary only, never
+  // touches entries' own start/end/duration. An entry that never overlapped
+  // anyone gets its full duration with no extra work; an entry that did share
+  // time with others gets credited minute-by-minute to whichever one the most
+  // recent applicable switch names (a switch is "applicable" to a segment only
+  // if its target is actually part of that segment's running set — this is
+  // what makes a stale switch, e.g. its entry later deleted or edited to no
+  // longer overlap, self-heal here rather than needing active cleanup
+  // elsewhere). Before any applicable switch, credit goes to whichever entry
+  // started first (was already running when the overlap began).
+  function computeFocusSplit(dayK) {
+    var now = Date.now();
+    var isToday = dayK === todayKey();
+    var entries = rowsForDay(dayK)
+      .filter(function (r) { return !r.entry.stop; })
+      .map(function (r) {
+        var start = new Date(r.entry.startAt).getTime();
+        var end = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : start);
+        return { id: r.entry.id, start: start, end: end };
+      })
+      .filter(function (e) { return e.end > e.start; });
+
+    var minutesMs = {}, overlappedIds = {};
+    entries.forEach(function (e) { minutesMs[e.id] = 0; });
+    function finish() {
+      var minutes = {};
+      Object.keys(minutesMs).forEach(function (id) { minutes[id] = Math.round(minutesMs[id] / 60000); });
+      return { minutes: minutes, overlapped: overlappedIds };
+    }
+    if (!entries.length) return finish();
+
+    function overlapsAny(e) {
+      return entries.some(function (o) { return o.id !== e.id && o.start < e.end && e.start < o.end; });
+    }
+    var solo = entries.filter(function (e) { return !overlapsAny(e); });
+    solo.forEach(function (e) { minutesMs[e.id] = e.end - e.start; });
+
+    var overlapping = entries.filter(function (e) { return overlapsAny(e); });
+    overlapping.forEach(function (e) { overlappedIds[e.id] = true; });
+    if (!overlapping.length) return finish();
+
+    var switches = (state.focusSwitches || []).map(function (s) {
+      return { entryId: s.entryId, at: new Date(s.at).getTime() };
+    }).sort(function (a, b) { return a.at - b.at; });
+
+    function activeEntryAt(t, runningIds) {
+      for (var i = switches.length - 1; i >= 0; i--) {
+        if (switches[i].at <= t && runningIds.indexOf(switches[i].entryId) !== -1) return switches[i].entryId;
+      }
+      return null;
+    }
+
+    var cutSet = {};
+    overlapping.forEach(function (e) { cutSet[e.start] = 1; cutSet[e.end] = 1; });
+    switches.forEach(function (s) { cutSet[s.at] = 1; });
+    var cuts = Object.keys(cutSet).map(Number).sort(function (a, b) { return a - b; });
+
+    for (var i = 0; i < cuts.length - 1; i++) {
+      var segStart = cuts[i], segEnd = cuts[i + 1];
+      if (segEnd <= segStart) continue;
+      var mid = (segStart + segEnd) / 2;
+      var running = overlapping.filter(function (e) { return e.start <= segStart && e.end >= segEnd; });
+      if (!running.length) continue;
+      if (running.length === 1) { minutesMs[running[0].id] += segEnd - segStart; continue; }
+      var runningIds = running.map(function (e) { return e.id; });
+      var activeId = activeEntryAt(mid, runningIds) ||
+        running.reduce(function (a, b) { return a.start <= b.start ? a : b; }).id;
+      minutesMs[activeId] += segEnd - segStart;
+    }
+    return finish();
+  }
+  // which of the given (currently ongoing) rows has focus right now, for the
+  // Home pill row's highlighted state — same "latest applicable switch, else
+  // whoever started first" rule computeFocusSplit uses per segment, just
+  // evaluated at "now" instead of walked across a whole day
+  function currentActiveEntryId(rows) {
+    var ids = rows.map(function (r) { return r.entry.id; });
+    var switches = state.focusSwitches || [];
+    for (var i = switches.length - 1; i >= 0; i--) {
+      if (ids.indexOf(switches[i].entryId) !== -1) return switches[i].entryId;
+    }
+    return rows.reduce(function (a, b) {
+      return new Date(a.entry.startAt) <= new Date(b.entry.startAt) ? a : b;
+    }).entry.id;
   }
 
   // cumulative minutes spent in `cat` on `dayK`, as a step series over
@@ -1899,7 +2018,21 @@
       return;
     }
 
-    ul.innerHTML = rows.map(function (r) {
+    var focusSplit = computeFocusSplit(viewDate);
+    var focusRowHtml = "";
+    var toggleRows = route === "home" ? rows.filter(function (r) { return !r.entry.stop; }) : [];
+    if (toggleRows.length >= 2) {
+      var activeId = currentActiveEntryId(toggleRows);
+      focusRowHtml = '<li class="focus-toggle" role="radiogroup" aria-label="Which task has your attention?">' +
+        toggleRows.map(function (r) {
+          var isActive = r.entry.id === activeId;
+          return '<button type="button" class="focus-pill' + (isActive ? " active" : "") + '" data-act="focus-switch" data-id="' +
+            r.entry.id + '" aria-pressed="' + isActive + '">' + escapeHtml(r.entry.task || "(no task)") + "</button>";
+        }).join("") +
+      "</li>";
+    }
+
+    ul.innerHTML = focusRowHtml + rows.map(function (r) {
       var e = r.entry;
       if (e.stop) {
         return '<li class="stopmark" data-id="' + e.id + '">ended ' + fmtClock(e.startAt) +
@@ -1925,12 +2058,18 @@
         ? '<span class="entry-cat-total" style="color:' + catColor(e.category) + '" title="Total ' +
           escapeHtml(e.category) + " on this day\">" + fmtDuration(catTotal) + "</span>"
         : "";
+      // supplementary only — never affects the duration shown above; only
+      // shown for entries computeFocusSplit found genuinely overlapping
+      var focusHtml = focusSplit.overlapped[e.id]
+        ? '<div class="entry-focus">~' + fmtMins(focusSplit.minutes[e.id] || 0) + " of your attention</div>"
+        : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
           '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
           '<span class="entry-main">' +
             '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
+            focusHtml +
           "</span>" +
           catTotalHtml +
         "</div>" +
@@ -2013,6 +2152,14 @@
       s.entries = s.entries.map(function (e) {
         return e.id === id ? Object.assign({}, e, { endAt: iso, updatedAt: iso }) : e;
       });
+      return s;
+    });
+  }
+  // records that `entryId` now has focus, for the Home focus-toggle pill row —
+  // purely additive/append-only, never touches any entry's own start/end
+  function recordFocusSwitch(entryId) {
+    queueMutation(function (s) {
+      s.focusSwitches = (s.focusSwitches || []).concat([{ id: uid(), entryId: entryId, at: new Date().toISOString() }]);
       return s;
     });
   }
@@ -2353,6 +2500,9 @@
 
   // ---------- timeline interactions ----------
   document.getElementById("timeline").addEventListener("click", function (ev) {
+    var focusPill = ev.target.closest(".focus-pill");
+    if (focusPill) { recordFocusSwitch(focusPill.dataset.id); return; }
+
     var stopLi = ev.target.closest(".stopmark");
     if (stopLi && ev.target.dataset.act === "del-stop") { deleteEntry(stopLi.dataset.id); return; }
 
