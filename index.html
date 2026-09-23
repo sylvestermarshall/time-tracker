@@ -440,7 +440,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, deletedIds: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -562,13 +562,29 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, deletedIds: {} }; }
+
+  // tombstones so a delete on one device isn't undone by a merge with another
+  // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
+  // doesn't grow forever
+  var DELETED_ID_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
   function normalizeState(raw) {
     raw = (raw && typeof raw === "object") ? raw : {};
+
+    var deletedIds = {};
+    if (raw.deletedIds && typeof raw.deletedIds === "object") {
+      var cutoff = Date.now() - DELETED_ID_TTL_MS;
+      Object.keys(raw.deletedIds).forEach(function (k) {
+        var t = raw.deletedIds[k];
+        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= cutoff) deletedIds[k] = new Date(t).toISOString();
+      });
+    }
+
     var entries = (Array.isArray(raw.entries) ? raw.entries : []).map(function (e) {
       // `type` is the old field name, kept here so existing data still loads
       var cat = typeof e.category === "string" ? e.category : (typeof e.type === "string" ? e.type : "");
+      var createdAt = e.createdAt || new Date().toISOString();
       return {
         id: e.id || uid(),
         startAt: e.startAt || (e.date && e.start ? makeStartAt(e.date, e.start) : new Date().toISOString()),
@@ -579,9 +595,13 @@
         task: typeof e.task === "string" ? e.task : (typeof e.narration === "string" ? e.narration : ""),
         category: cat,
         stop: !!e.stop,
-        createdAt: e.createdAt || new Date().toISOString()
+        createdAt: createdAt,
+        // when this entry last changed, for merging two devices' edits
+        updatedAt: e.updatedAt && !isNaN(new Date(e.updatedAt)) ? new Date(e.updatedAt).toISOString() : createdAt
       };
-    }).filter(function (e) { return !isNaN(new Date(e.startAt)); });
+    }).filter(function (e) { return !isNaN(new Date(e.startAt)); })
+      // a tombstone wins unless this copy of the entry was edited after the delete
+      .filter(function (e) { return !deletedIds[e.id] || new Date(e.updatedAt) > new Date(deletedIds[e.id]); });
     entries.sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
 
     var catSet = {};
@@ -614,8 +634,45 @@
     }
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
-      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals
+      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, deletedIds: deletedIds
     };
+  }
+
+  function uniq(arr) {
+    var seen = {}, out = [];
+    arr.forEach(function (v) { if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
+    return out;
+  }
+
+  // Combine two copies of the state (e.g. this device's unsynced local state and
+  // whatever's currently on the gist) without silently dropping either side's
+  // work. Entries are unioned by id, the more recently edited copy of each wins
+  // a conflict, and a delete only sticks if it happened after the surviving
+  // copy's last edit. Settings maps (goals etc.) are simple unions.
+  function mergeState(a, b) {
+    a = a || emptyState(); b = b || emptyState();
+    var deletedIds = Object.assign({}, a.deletedIds, b.deletedIds);
+    Object.keys(a.deletedIds || {}).forEach(function (k) {
+      if (b.deletedIds && b.deletedIds[k]) {
+        deletedIds[k] = new Date(a.deletedIds[k]) > new Date(b.deletedIds[k]) ? a.deletedIds[k] : b.deletedIds[k];
+      }
+    });
+
+    var byId = {};
+    (a.entries || []).concat(b.entries || []).forEach(function (e) {
+      var cur = byId[e.id];
+      if (!cur || new Date(e.updatedAt || e.createdAt) > new Date(cur.updatedAt || cur.createdAt)) byId[e.id] = e;
+    });
+    var entries = Object.keys(byId).map(function (k) { return byId[k]; });
+
+    return normalizeState({
+      entries: entries,
+      categories: uniq((a.categories || []).concat(b.categories || [])),
+      goals: Object.assign({}, a.goals, b.goals),
+      goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
+      taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
+      deletedIds: deletedIds
+    });
   }
 
   function loadLocalCache() {
@@ -690,13 +747,38 @@
     flushTimer = setTimeout(flushToRemote, 800);
   }
 
+  // fetch whatever's currently on the gist and merge it into `state` before
+  // returning — used before every push so two devices racing to sync can't
+  // clobber each other's unsynced work
+  function pullAndMerge(gistId) {
+    return fetch(GITHUB_API + "/gists/" + gistId, { headers: ghHeaders() }).then(function (res) {
+      if (res.status === 401) return Promise.reject({ code: "bad_token" });
+      if (!res.ok) return Promise.reject({ code: "http_error" });
+      return res.json();
+    }).then(function (gist) {
+      var file = gist.files && gist.files[GIST_FILENAME];
+      var remote = file && file.content ? JSON.parse(file.content) : null;
+      if (!remote) return false;
+      var remoteState = normalizeState(remote);
+      var merged = mergeState(state, remoteState);
+      var changed = JSON.stringify(merged) !== JSON.stringify(state);
+      state = merged;
+      cacheLocal();
+      if (changed) render();
+      // true if this device now has something the gist didn't (worth pushing back)
+      return JSON.stringify(merged) !== JSON.stringify(remoteState);
+    });
+  }
+
   function flushToRemote() {
     if (!getToken() || !pendingSync) return;
     pendingSync = false;
     findOrCreateGist().then(function (gistId) {
-      var body = { files: {} };
-      body.files[GIST_FILENAME] = { content: JSON.stringify(state) };
-      return fetch(GITHUB_API + "/gists/" + gistId, { method: "PATCH", headers: ghHeaders(), body: JSON.stringify(body) });
+      return pullAndMerge(gistId).then(function () {
+        var body = { files: {} };
+        body.files[GIST_FILENAME] = { content: JSON.stringify(state) };
+        return fetch(GITHUB_API + "/gists/" + gistId, { method: "PATCH", headers: ghHeaders(), body: JSON.stringify(body) });
+      });
     }).then(function (res) {
       if (res.status === 401) return Promise.reject({ code: "bad_token" });
       if (!res.ok) return Promise.reject({ code: "http_error" });
@@ -713,18 +795,16 @@
     if (!getToken()) { setSyncStatus("local"); return Promise.resolve(); }
     setSyncStatus("syncing");
     return findOrCreateGist().then(function (gistId) {
-      return fetch(GITHUB_API + "/gists/" + gistId, { headers: ghHeaders() });
-    }).then(function (res) {
-      if (res.status === 401) return Promise.reject({ code: "bad_token" });
-      if (!res.ok) return Promise.reject({ code: "http_error" });
-      return res.json();
-    }).then(function (gist) {
-      var file = gist.files && gist.files[GIST_FILENAME];
-      var remote = file && file.content ? JSON.parse(file.content) : null;
-      state = normalizeState(remote);
-      cacheLocal();
-      render();
+      return pullAndMerge(gistId);
+    }).then(function (shouldPushBack) {
       setSyncStatus("synced");
+      if (shouldPushBack) {
+        // this device had unsynced work the gist didn't have — push the merged
+        // result back up so the rest of the merge round-trips to other devices
+        pendingSync = true;
+        clearTimeout(flushTimer);
+        flushTimer = setTimeout(flushToRemote, 500);
+      }
     }).catch(function (err) {
       setSyncStatus(err && err.code === "bad_token" ? "badtoken" : "error");
     });
@@ -1314,12 +1394,13 @@
     var startAt = makeStartAt(viewDate, hhmm);
     var endAt = opts.concurrent ? makeEndAt(startAt, opts.endHHMM || "") : "";
     category = category.trim();
+    var now = new Date().toISOString();
     queueMutation(function (s) {
       s.entries.push({
         id: uid(), startAt: startAt, endAt: endAt,
         concurrent: !!opts.concurrent,
         task: task.trim(), category: category, stop: false,
-        createdAt: new Date().toISOString()
+        createdAt: now, updatedAt: now
       });
       if (category && s.categories.indexOf(category) < 0) s.categories.push(category);
       return s;
@@ -1327,8 +1408,9 @@
   }
   function addStop(hhmm) {
     var startAt = makeStartAt(viewDate, hhmm);
+    var now = new Date().toISOString();
     queueMutation(function (s) {
-      s.entries.push({ id: uid(), startAt: startAt, task: "", category: "", stop: true, createdAt: new Date().toISOString() });
+      s.entries.push({ id: uid(), startAt: startAt, task: "", category: "", stop: true, createdAt: now, updatedAt: now });
       return s;
     });
   }
@@ -1342,14 +1424,20 @@
         if ("concurrent" in patch) next.concurrent = !!patch.concurrent;
         if ("task" in patch) next.task = patch.task.trim();
         if ("category" in patch) next.category = patch.category.trim();
+        next.updatedAt = new Date().toISOString();
         return next;
       });
       return s;
     });
   }
   function deleteEntry(id) {
+    var iso = new Date().toISOString();
     queueMutation(function (s) {
       s.entries = s.entries.filter(function (e) { return e.id !== id; });
+      // a tombstone so this delete survives a merge with a device that hasn't
+      // synced yet and still has the entry
+      s.deletedIds = Object.assign({}, s.deletedIds);
+      s.deletedIds[id] = iso;
       return s;
     });
   }
@@ -1357,7 +1445,7 @@
     var iso = new Date().toISOString();
     queueMutation(function (s) {
       s.entries = s.entries.map(function (e) {
-        return e.id === id ? Object.assign({}, e, { endAt: iso }) : e;
+        return e.id === id ? Object.assign({}, e, { endAt: iso, updatedAt: iso }) : e;
       });
       return s;
     });
