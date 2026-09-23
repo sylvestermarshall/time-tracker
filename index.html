@@ -424,6 +424,7 @@
     <div class="modal-actions">
       <button class="btn btn-ghost btn-small" id="closeBackup">Close</button>
       <button class="btn btn-ghost btn-small" id="copyBackup">Copy</button>
+      <button class="btn btn-ghost btn-small" id="downloadBackup">Download .json</button>
       <button class="btn btn-primary btn-small" id="restoreBackup">Restore from text</button>
     </div>
   </div>
@@ -1695,6 +1696,11 @@
     backupText.select();
     try { document.execCommand("copy"); backupStatus.textContent = "Copied."; backupStatus.style.color = "var(--accent)"; }
     catch (e) { backupStatus.textContent = "Press ⌘/Ctrl+C to copy."; }
+  });
+  document.getElementById("downloadBackup").addEventListener("click", function () {
+    downloadFile("time-tracker-backup-" + todayKey() + ".json", backupText.value, "application/json");
+    backupStatus.textContent = "Downloaded.";
+    backupStatus.style.color = "var(--accent)";
   });
   document.getElementById("restoreBackup").addEventListener("click", function () {
     var parsed;
