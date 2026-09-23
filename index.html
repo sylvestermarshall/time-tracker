@@ -199,6 +199,16 @@
   .goal-row .goal-input.limit { color: var(--danger); }
   .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
 
+  /* categories page: a big title per category, divider between categories
+     (not between the tasks/add-field inside one) */
+  #tasklibList .goal-section-label {
+    font-size: 1.5rem; font-weight: 800; text-transform: none; letter-spacing: normal;
+    margin: 0 0 0.6rem;
+  }
+  #tasklibList .goal-section-label .dot { width: 0.9rem; height: 0.9rem; margin-right: 0.5rem; }
+  #tasklibList .goal-row { border-bottom: 0; }
+  #tasklibList .goal-section + .goal-section { border-top: 1px solid var(--line); margin-top: 1.4rem; padding-top: 1.2rem; }
+
   /* ---------- overview page ---------- */
   .ov-gist {
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
