@@ -458,7 +458,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {}, deletedTaskCatalog: {}, taskCatalogRevivals: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -580,7 +580,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {}, deletedTaskCatalog: {}, taskCatalogRevivals: {} }; }
 
   // tombstones so a delete on one device isn't undone by a merge with another
   // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
@@ -624,6 +624,30 @@
       var tomb = deletedCategories[name];
       if (!tomb) return true;
       var rev = categoryRevivals[name];
+      return !!rev && new Date(rev) > new Date(tomb);
+    }
+    // same tombstone/revival pair, for a task removed from the task catalog —
+    // taskCatalog is otherwise merged by plain union too, so a delete needs the
+    // same protection a category delete does
+    var deletedTaskCatalog = {};
+    if (raw.deletedTaskCatalog && typeof raw.deletedTaskCatalog === "object") {
+      var taskCutoff = Date.now() - DELETED_ID_TTL_MS;
+      Object.keys(raw.deletedTaskCatalog).forEach(function (k) {
+        var t = raw.deletedTaskCatalog[k];
+        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= taskCutoff) deletedTaskCatalog[k] = new Date(t).toISOString();
+      });
+    }
+    var taskCatalogRevivals = {};
+    if (raw.taskCatalogRevivals && typeof raw.taskCatalogRevivals === "object") {
+      Object.keys(raw.taskCatalogRevivals).forEach(function (k) {
+        var t = raw.taskCatalogRevivals[k];
+        if (k && t && !isNaN(new Date(t))) taskCatalogRevivals[k] = new Date(t).toISOString();
+      });
+    }
+    function taskCatalogAllowed(task) {
+      var tomb = deletedTaskCatalog[task];
+      if (!tomb) return true;
+      var rev = taskCatalogRevivals[task];
       return !!rev && new Date(rev) > new Date(tomb);
     }
 
@@ -690,7 +714,7 @@
     if (raw.taskCatalog && typeof raw.taskCatalog === "object") {
       Object.keys(raw.taskCatalog).forEach(function (k) {
         var v = raw.taskCatalog[k];
-        if (k && typeof v === "string" && v) { taskCatalog[k] = v; if (categoryAllowed(v)) catSet[v] = true; }
+        if (k && typeof v === "string" && v && taskCatalogAllowed(k)) { taskCatalog[k] = v; if (categoryAllowed(v)) catSet[v] = true; }
       });
     }
 
@@ -707,7 +731,7 @@
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
       archivedCategories: archivedCategories, deletedIds: deletedIds, deletedCategories: deletedCategories,
-      categoryRevivals: categoryRevivals
+      categoryRevivals: categoryRevivals, deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals
     };
   }
 
@@ -742,6 +766,18 @@
         categoryRevivals[k] = new Date(a.categoryRevivals[k]) > new Date(b.categoryRevivals[k]) ? a.categoryRevivals[k] : b.categoryRevivals[k];
       }
     });
+    var deletedTaskCatalog = Object.assign({}, a.deletedTaskCatalog, b.deletedTaskCatalog);
+    Object.keys(a.deletedTaskCatalog || {}).forEach(function (k) {
+      if (b.deletedTaskCatalog && b.deletedTaskCatalog[k]) {
+        deletedTaskCatalog[k] = new Date(a.deletedTaskCatalog[k]) > new Date(b.deletedTaskCatalog[k]) ? a.deletedTaskCatalog[k] : b.deletedTaskCatalog[k];
+      }
+    });
+    var taskCatalogRevivals = Object.assign({}, a.taskCatalogRevivals, b.taskCatalogRevivals);
+    Object.keys(a.taskCatalogRevivals || {}).forEach(function (k) {
+      if (b.taskCatalogRevivals && b.taskCatalogRevivals[k]) {
+        taskCatalogRevivals[k] = new Date(a.taskCatalogRevivals[k]) > new Date(b.taskCatalogRevivals[k]) ? a.taskCatalogRevivals[k] : b.taskCatalogRevivals[k];
+      }
+    });
 
     var byId = {};
     (a.entries || []).concat(b.entries || []).forEach(function (e) {
@@ -758,7 +794,8 @@
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
       archivedCategories: Object.assign({}, a.archivedCategories, b.archivedCategories),
-      deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals
+      deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
+      deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals
     });
   }
 
@@ -1650,6 +1687,12 @@
     s.categoryRevivals = Object.assign({}, s.categoryRevivals);
     s.categoryRevivals[name] = new Date().toISOString();
   }
+  // same idea as reviveCategory, for a task catalog entry
+  function reviveTaskCatalog(s, task) {
+    if (!(task in s.deletedTaskCatalog)) return;
+    s.taskCatalogRevivals = Object.assign({}, s.taskCatalogRevivals);
+    s.taskCatalogRevivals[task] = new Date().toISOString();
+  }
   function addCategoryOnly(name) {
     name = name.trim();
     if (!name) return;
@@ -1667,24 +1710,35 @@
       s.taskCatalog[task] = category;
       if (s.categories.indexOf(category) < 0) s.categories = s.categories.concat([category]);
       reviveCategory(s, category);
+      reviveTaskCatalog(s, task);
       return s;
     });
   }
   function removeTaskCatalog(task) {
+    var iso = new Date().toISOString();
     queueMutation(function (s) {
       s.taskCatalog = Object.assign({}, s.taskCatalog);
       delete s.taskCatalog[task];
+      // tombstone, for the same reason deleteCategory needs one: taskCatalog is
+      // otherwise merged by plain union, so without this the next auto-sync's
+      // pull-and-merge would just bring the removed task right back
+      s.deletedTaskCatalog = Object.assign({}, s.deletedTaskCatalog);
+      s.deletedTaskCatalog[task] = iso;
       return s;
     });
   }
   function renameTaskCatalog(oldTask, newTask) {
     oldTask = oldTask.trim(); newTask = newTask.trim();
     if (!newTask || newTask === oldTask) return;
+    var iso = new Date().toISOString();
     queueMutation(function (s) {
       s.taskCatalog = Object.assign({}, s.taskCatalog);
       var cat = s.taskCatalog[oldTask];
       delete s.taskCatalog[oldTask];
       s.taskCatalog[newTask] = cat;
+      s.deletedTaskCatalog = Object.assign({}, s.deletedTaskCatalog);
+      s.deletedTaskCatalog[oldTask] = iso;
+      reviveTaskCatalog(s, newTask);
       return s;
     });
   }
