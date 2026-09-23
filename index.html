@@ -458,7 +458,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -580,7 +580,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {} }; }
 
   // tombstones so a delete on one device isn't undone by a merge with another
   // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
@@ -608,6 +608,24 @@
         if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= catCutoff) deletedCategories[k] = new Date(t).toISOString();
       });
     }
+    // when a deleted category name is deliberately reused (re-added, given a new
+    // task, or a rename lands on it), this records *when* — a tombstone map can
+    // only ever be unioned back in on merge, never un-set, so revival has to be
+    // "a later timestamp wins" too, the same way an edited entry outruns its own
+    // tombstone via updatedAt
+    var categoryRevivals = {};
+    if (raw.categoryRevivals && typeof raw.categoryRevivals === "object") {
+      Object.keys(raw.categoryRevivals).forEach(function (k) {
+        var t = raw.categoryRevivals[k];
+        if (k && t && !isNaN(new Date(t))) categoryRevivals[k] = new Date(t).toISOString();
+      });
+    }
+    function categoryAllowed(name) {
+      var tomb = deletedCategories[name];
+      if (!tomb) return true;
+      var rev = categoryRevivals[name];
+      return !!rev && new Date(rev) > new Date(tomb);
+    }
 
     var entries = (Array.isArray(raw.entries) ? raw.entries : []).map(function (e) {
       // `type` is the old field name, kept here so existing data still loads
@@ -634,7 +652,7 @@
 
     var catSet = {};
     var rawCats = Array.isArray(raw.categories) ? raw.categories : (Array.isArray(raw.types) ? raw.types : []);
-    rawCats.forEach(function (t) { if (t && !deletedCategories[t]) catSet[t] = true; });
+    rawCats.forEach(function (t) { if (t && categoryAllowed(t)) catSet[t] = true; });
     // a category tombstone wins unless this entry was (re-)saved after the delete —
     // e.g. logging a fresh entry under a previously-deleted category name revives it
     entries.forEach(function (e) {
@@ -672,7 +690,7 @@
     if (raw.taskCatalog && typeof raw.taskCatalog === "object") {
       Object.keys(raw.taskCatalog).forEach(function (k) {
         var v = raw.taskCatalog[k];
-        if (k && typeof v === "string" && v) { taskCatalog[k] = v; if (!deletedCategories[v]) catSet[v] = true; }
+        if (k && typeof v === "string" && v) { taskCatalog[k] = v; if (categoryAllowed(v)) catSet[v] = true; }
       });
     }
 
@@ -688,7 +706,8 @@
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
-      archivedCategories: archivedCategories, deletedIds: deletedIds, deletedCategories: deletedCategories
+      archivedCategories: archivedCategories, deletedIds: deletedIds, deletedCategories: deletedCategories,
+      categoryRevivals: categoryRevivals
     };
   }
 
@@ -717,6 +736,12 @@
         deletedCategories[k] = new Date(a.deletedCategories[k]) > new Date(b.deletedCategories[k]) ? a.deletedCategories[k] : b.deletedCategories[k];
       }
     });
+    var categoryRevivals = Object.assign({}, a.categoryRevivals, b.categoryRevivals);
+    Object.keys(a.categoryRevivals || {}).forEach(function (k) {
+      if (b.categoryRevivals && b.categoryRevivals[k]) {
+        categoryRevivals[k] = new Date(a.categoryRevivals[k]) > new Date(b.categoryRevivals[k]) ? a.categoryRevivals[k] : b.categoryRevivals[k];
+      }
+    });
 
     var byId = {};
     (a.entries || []).concat(b.entries || []).forEach(function (e) {
@@ -733,7 +758,7 @@
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
       archivedCategories: Object.assign({}, a.archivedCategories, b.archivedCategories),
-      deletedIds: deletedIds, deletedCategories: deletedCategories
+      deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals
     });
   }
 
@@ -1615,10 +1640,15 @@
   // gets (re-)created on purpose, so a deliberate re-add isn't undone by the
   // earlier deletion's tombstone
   function reviveCategory(s, name) {
-    if (name in s.deletedCategories) {
-      s.deletedCategories = Object.assign({}, s.deletedCategories);
-      delete s.deletedCategories[name];
-    }
+    if (!(name in s.deletedCategories)) return;
+    // can't just delete the tombstone here: the very next auto-sync pulls the
+    // gist and merges it in before pushing, and a plain map merge only ever
+    // unions keys back in, so a removed key doesn't survive if the other side
+    // still has it — record a revival timestamp instead, which (like an
+    // entry's updatedAt beating its own tombstone) survives that merge because
+    // it's a "newer wins" comparison, not a key that can vanish
+    s.categoryRevivals = Object.assign({}, s.categoryRevivals);
+    s.categoryRevivals[name] = new Date().toISOString();
   }
   function addCategoryOnly(name) {
     name = name.trim();
