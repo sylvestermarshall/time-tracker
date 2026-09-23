@@ -458,7 +458,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, deletedIds: {} };
+  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {} };
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -580,7 +580,7 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, deletedIds: {} }; }
+  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {} }; }
 
   // tombstones so a delete on one device isn't undone by a merge with another
   // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
@@ -660,9 +660,19 @@
       });
     }
 
+    // categories hidden from new-entry autofill / goal-setting but kept intact
+    // for history — set via "Archive" on the Categories page
+    var archivedCategories = {};
+    if (raw.archivedCategories && typeof raw.archivedCategories === "object") {
+      Object.keys(raw.archivedCategories).forEach(function (k) {
+        if (k && raw.archivedCategories[k]) archivedCategories[k] = true;
+      });
+    }
+
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
-      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog, deletedIds: deletedIds
+      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
+      archivedCategories: archivedCategories, deletedIds: deletedIds
     };
   }
 
@@ -700,6 +710,7 @@
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
+      archivedCategories: Object.assign({}, a.archivedCategories, b.archivedCategories),
       deletedIds: deletedIds
     });
   }
@@ -949,6 +960,9 @@
 
   function goalKind(c) { return state.goalKinds[c] === "limit" ? "limit" : "invest"; }
   function taskKey(cat, task) { return (cat || "—") + "\n" + task; }
+  function isArchived(c) { return !!state.archivedCategories[c]; }
+  function activeCategories() { return state.categories.filter(function (c) { return !isArchived(c); }); }
+  function categoryHasEntries(c) { return state.entries.some(function (e) { return e.category === c; }); }
 
   // duration per entry id across all days (same chain rules as rowsForDay)
   function entryDurations() {
@@ -984,7 +998,7 @@
   }
 
   function categoryGoalsHtml() {
-    var cats = state.categories.slice().sort(function (a, b) { return a.localeCompare(b); });
+    var cats = activeCategories().sort(function (a, b) { return a.localeCompare(b); });
     if (!cats.length) return '<p class="goals-empty">No categories yet — log a few entries first, then set a goal for each.</p>';
 
     function goalRow(c) {
@@ -1052,7 +1066,8 @@
   function renderCategories() {
     document.getElementById("pageTitle").textContent = "Categories";
     var box = document.getElementById("tasklibList");
-    var cats = state.categories.slice().sort(function (a, b) { return a.localeCompare(b); });
+    var cats = activeCategories().sort(function (a, b) { return a.localeCompare(b); });
+    var archived = Object.keys(state.archivedCategories).sort(function (a, b) { return a.localeCompare(b); });
     var byCat = {};
     Object.keys(state.taskCatalog).forEach(function (t) {
       var c = state.taskCatalog[t];
@@ -1067,16 +1082,19 @@
       "</div>";
 
     if (!cats.length) {
-      html += '<p class="goals-empty">No categories yet — add one above, or log an entry with a category.</p>';
+      html += '<p class="goals-empty">No active categories — add one above, or log an entry with a category.</p>';
     } else {
       html += cats.map(function (c) {
         var tasks = (byCat[c] || []).slice().sort(function (a, b) { return a.localeCompare(b); });
+        var removeBtn = categoryHasEntries(c)
+          ? '<button type="button" class="btn btn-ghost btn-small" data-act="archive-cat">Archive</button>'
+          : '<button type="button" class="btn btn-ghost btn-small" data-act="delete-cat">Delete</button>';
         return '<div class="goal-section" data-cat="' + escapeHtml(c) + '">' +
           '<div class="goal-section-label" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">' +
             '<span><span class="dot" style="background:' + catColor(c) + '"></span>' + escapeHtml(c) + "</span>" +
             '<span style="display:flex;gap:0.4rem;flex-shrink:0;">' +
               '<button type="button" class="btn btn-ghost btn-small" data-act="rename-cat">Rename</button>' +
-              '<button type="button" class="btn btn-ghost btn-small" data-act="delete-cat">Delete</button>' +
+              removeBtn +
             "</span>" +
           "</div>" +
           (tasks.length
@@ -1094,6 +1112,20 @@
           "</div>" +
         "</div>";
       }).join("");
+    }
+
+    if (archived.length) {
+      html += '<div class="goal-section">' +
+        '<div class="goal-section-label" style="font-size:1rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-faint);">Archived</div>' +
+        '<div class="goal-section-sub">Hidden from autofill and goals, but their history is untouched.</div>' +
+        archived.map(function (c) {
+          return '<div class="goal-row" data-cat="' + escapeHtml(c) + '">' +
+            '<span class="goal-cat"><span class="dot" style="background:' + catColor(c) + '"></span>' +
+              '<span class="goal-cat-name">' + escapeHtml(c) + "</span></span>" +
+            '<button type="button" class="btn btn-ghost btn-small" data-act="unarchive-cat">Unarchive</button>' +
+          "</div>";
+        }).join("") +
+      "</div>";
     }
     box.innerHTML = html;
   }
@@ -1622,8 +1654,8 @@
       return s;
     });
   }
-  // removes a category from the list and its task catalog entries; entries
-  // already logged under it keep the category text as-is
+  // removes a category with no history from the list and its task catalog
+  // entries; only offered on the Categories page when nothing is logged under it
   function deleteCategory(name) {
     queueMutation(function (s) {
       s.categories = s.categories.filter(function (c) { return c !== name; });
@@ -1634,6 +1666,24 @@
       s.taskCatalog = newCatalog;
       s.goals = Object.assign({}, s.goals); delete s.goals[name];
       s.goalKinds = Object.assign({}, s.goalKinds); delete s.goalKinds[name];
+      s.archivedCategories = Object.assign({}, s.archivedCategories); delete s.archivedCategories[name];
+      return s;
+    });
+  }
+  // hides a category (and its catalog tasks) from autofill and goal-setting
+  // without touching its history — offered instead of Delete once a category
+  // has logged entries, so past reports keep showing it
+  function archiveCategory(name) {
+    queueMutation(function (s) {
+      s.archivedCategories = Object.assign({}, s.archivedCategories);
+      s.archivedCategories[name] = true;
+      return s;
+    });
+  }
+  function unarchiveCategory(name) {
+    queueMutation(function (s) {
+      s.archivedCategories = Object.assign({}, s.archivedCategories);
+      delete s.archivedCategories[name];
       return s;
     });
   }
@@ -1712,7 +1762,7 @@
     var q = fCat.value.trim().toLowerCase();
     var counts = {};
     state.entries.forEach(function (e) { if (e.category) counts[e.category] = (counts[e.category] || 0) + 1; });
-    return state.categories
+    return activeCategories()
       .filter(function (c) { return !q || c.toLowerCase().indexOf(q) >= 0; })
       .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); })
       .slice(0, 8)
@@ -1762,7 +1812,7 @@
     var q = fTask.value.trim().toLowerCase();
     if (!q) return [];
     return Object.keys(state.taskCatalog)
-      .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; })
+      .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0 && !isArchived(state.taskCatalog[t]); })
       .sort(function (a, b) {
         var aStarts = a.toLowerCase().indexOf(q) === 0, bStarts = b.toLowerCase().indexOf(q) === 0;
         if (aStarts !== bStarts) return aStarts ? -1 : 1;
@@ -1970,12 +2020,22 @@
     var deleteCatBtn = ev.target.closest('[data-act="delete-cat"]');
     if (deleteCatBtn) {
       var delName = deleteCatBtn.closest(".goal-section").dataset.cat;
-      if (confirm('Delete the "' + delName + '" category? Its catalog tasks and goal settings will be cleared. ' +
-        "Already-logged entries won't change, so it may still show up until you edit those.")) {
+      if (confirm('Delete the "' + delName + '" category? Nothing is logged under it, so this removes it completely.')) {
         deleteCategory(delName);
       }
       return;
     }
+    var archiveBtn = ev.target.closest('[data-act="archive-cat"]');
+    if (archiveBtn) {
+      var archName = archiveBtn.closest(".goal-section").dataset.cat;
+      if (confirm('Archive "' + archName + '"? It disappears from new-entry autofill and goal-setting, ' +
+        "but its logged history stays exactly as-is — you can unarchive it anytime.")) {
+        archiveCategory(archName);
+      }
+      return;
+    }
+    var unarchiveBtn = ev.target.closest('[data-act="unarchive-cat"]');
+    if (unarchiveBtn) { unarchiveCategory(unarchiveBtn.closest(".goal-row").dataset.cat); return; }
   });
   tasklibList.addEventListener("keydown", function (ev) {
     if (ev.key !== "Enter") return;
