@@ -1433,10 +1433,10 @@
 
     var html = '<p class="goals-intro">Pick two dates and up to 3 categories to see how your time compares, hour by hour.</p>' +
       '<div class="row">' +
-        '<div class="field" style="flex:1"><label class="lbl" for="compareDateA">Comparing</label>' +
-          '<input type="date" id="compareDateA" value="' + escapeHtml(compareDateA) + '"></div>' +
-        '<div class="field" style="flex:1"><label class="lbl" for="compareDateB">With</label>' +
+        '<div class="field" style="flex:1"><label class="lbl" for="compareDateB">Compare</label>' +
           '<input type="date" id="compareDateB" value="' + escapeHtml(compareDateB) + '"></div>' +
+        '<div class="field" style="flex:1"><label class="lbl" for="compareDateA">To</label>' +
+          '<input type="date" id="compareDateA" value="' + escapeHtml(compareDateA) + '"></div>' +
       "</div>";
 
     if (!cats.length) {
