@@ -458,7 +458,7 @@
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
-  var state = { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {}, deletedTaskCatalog: {}, taskCatalogRevivals: {} };
+  var state = emptyState(); // filled in for real by initSync(); see emptyState() below for the full shape
   var pendingSync = false;
   var flushTimer = null;
   var syncMode = "init";
@@ -580,76 +580,82 @@
   }
 
   // ---------- state ----------
-  function emptyState() { return { entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {}, deletedIds: {}, deletedCategories: {}, categoryRevivals: {}, deletedTaskCatalog: {}, taskCatalogRevivals: {} }; }
+  function emptyState() {
+    return {
+      entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {}, archivedCategories: {},
+      deletedIds: {},
+      deletedCategories: {}, categoryRevivals: {},
+      deletedTaskCatalog: {}, taskCatalogRevivals: {},
+      deletedGoals: {}, goalRevivals: {},
+      deletedGoalKinds: {}, goalKindRevivals: {},
+      deletedTaskGoals: {}, taskGoalRevivals: {},
+      deletedArchivedCategories: {}, archivedCategoryRevivals: {}
+    };
+  }
 
   // tombstones so a delete on one device isn't undone by a merge with another
   // device that hasn't seen it yet; pruned after DELETED_ID_TTL_MS so the map
   // doesn't grow forever
   var DELETED_ID_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
+  // Every settings map here (goals, categories, the task catalog, ...) is
+  // merged by plain union — mergeState just does Object.assign(a, b) — which
+  // is fine for *adding* a value but silently undoes a *removal*: clear a
+  // goal locally, and the very next auto-sync pulls the gist (which still has
+  // the old value) and merges it right back in. A tombstone alone isn't
+  // enough either, because deliberately re-adding the same key later has to
+  // beat its own tombstone, and a map merge can only ever union keys back in,
+  // never un-set one — so revival has to be "a later timestamp wins" too, the
+  // same way an edited entry already outruns its own deletedIds tombstone via
+  // updatedAt. These three helpers are that pattern, generic over whichever
+  // map/key it's protecting.
+  function parseTimestamps(raw, pruneTTL) {
+    var out = {};
+    if (raw && typeof raw === "object") {
+      var cutoff = pruneTTL ? Date.now() - DELETED_ID_TTL_MS : -Infinity;
+      Object.keys(raw).forEach(function (k) {
+        var t = raw[k];
+        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= cutoff) out[k] = new Date(t).toISOString();
+      });
+    }
+    return out;
+  }
+  function tombstoneAllowed(deletedMap, revivalMap, key) {
+    var tomb = deletedMap[key];
+    if (!tomb) return true;
+    var rev = revivalMap[key];
+    return !!rev && new Date(rev) > new Date(tomb);
+  }
+  function mergeTimestamps(a, b) {
+    a = a || {}; b = b || {};
+    var out = Object.assign({}, a, b);
+    Object.keys(a).forEach(function (k) { if (b[k]) out[k] = new Date(a[k]) > new Date(b[k]) ? a[k] : b[k]; });
+    return out;
+  }
+
   function normalizeState(raw) {
     raw = (raw && typeof raw === "object") ? raw : {};
 
-    var deletedIds = {};
-    if (raw.deletedIds && typeof raw.deletedIds === "object") {
-      var cutoff = Date.now() - DELETED_ID_TTL_MS;
-      Object.keys(raw.deletedIds).forEach(function (k) {
-        var t = raw.deletedIds[k];
-        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= cutoff) deletedIds[k] = new Date(t).toISOString();
-      });
-    }
-    // same idea, for a deleted category name — without this, merging with a
-    // gist snapshot from before the delete would just union it right back in
-    var deletedCategories = {};
-    if (raw.deletedCategories && typeof raw.deletedCategories === "object") {
-      var catCutoff = Date.now() - DELETED_ID_TTL_MS;
-      Object.keys(raw.deletedCategories).forEach(function (k) {
-        var t = raw.deletedCategories[k];
-        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= catCutoff) deletedCategories[k] = new Date(t).toISOString();
-      });
-    }
-    // when a deleted category name is deliberately reused (re-added, given a new
-    // task, or a rename lands on it), this records *when* — a tombstone map can
-    // only ever be unioned back in on merge, never un-set, so revival has to be
-    // "a later timestamp wins" too, the same way an edited entry outruns its own
-    // tombstone via updatedAt
-    var categoryRevivals = {};
-    if (raw.categoryRevivals && typeof raw.categoryRevivals === "object") {
-      Object.keys(raw.categoryRevivals).forEach(function (k) {
-        var t = raw.categoryRevivals[k];
-        if (k && t && !isNaN(new Date(t))) categoryRevivals[k] = new Date(t).toISOString();
-      });
-    }
-    function categoryAllowed(name) {
-      var tomb = deletedCategories[name];
-      if (!tomb) return true;
-      var rev = categoryRevivals[name];
-      return !!rev && new Date(rev) > new Date(tomb);
-    }
-    // same tombstone/revival pair, for a task removed from the task catalog —
-    // taskCatalog is otherwise merged by plain union too, so a delete needs the
-    // same protection a category delete does
-    var deletedTaskCatalog = {};
-    if (raw.deletedTaskCatalog && typeof raw.deletedTaskCatalog === "object") {
-      var taskCutoff = Date.now() - DELETED_ID_TTL_MS;
-      Object.keys(raw.deletedTaskCatalog).forEach(function (k) {
-        var t = raw.deletedTaskCatalog[k];
-        if (k && t && !isNaN(new Date(t)) && new Date(t).getTime() >= taskCutoff) deletedTaskCatalog[k] = new Date(t).toISOString();
-      });
-    }
-    var taskCatalogRevivals = {};
-    if (raw.taskCatalogRevivals && typeof raw.taskCatalogRevivals === "object") {
-      Object.keys(raw.taskCatalogRevivals).forEach(function (k) {
-        var t = raw.taskCatalogRevivals[k];
-        if (k && t && !isNaN(new Date(t))) taskCatalogRevivals[k] = new Date(t).toISOString();
-      });
-    }
-    function taskCatalogAllowed(task) {
-      var tomb = deletedTaskCatalog[task];
-      if (!tomb) return true;
-      var rev = taskCatalogRevivals[task];
-      return !!rev && new Date(rev) > new Date(tomb);
-    }
+    var deletedIds = parseTimestamps(raw.deletedIds, true);
+    var deletedCategories = parseTimestamps(raw.deletedCategories, true);
+    var categoryRevivals = parseTimestamps(raw.categoryRevivals, false);
+    var deletedTaskCatalog = parseTimestamps(raw.deletedTaskCatalog, true);
+    var taskCatalogRevivals = parseTimestamps(raw.taskCatalogRevivals, false);
+    var deletedGoals = parseTimestamps(raw.deletedGoals, true);
+    var goalRevivals = parseTimestamps(raw.goalRevivals, false);
+    var deletedGoalKinds = parseTimestamps(raw.deletedGoalKinds, true);
+    var goalKindRevivals = parseTimestamps(raw.goalKindRevivals, false);
+    var deletedTaskGoals = parseTimestamps(raw.deletedTaskGoals, true);
+    var taskGoalRevivals = parseTimestamps(raw.taskGoalRevivals, false);
+    var deletedArchivedCategories = parseTimestamps(raw.deletedArchivedCategories, true);
+    var archivedCategoryRevivals = parseTimestamps(raw.archivedCategoryRevivals, false);
+
+    function categoryAllowed(name) { return tombstoneAllowed(deletedCategories, categoryRevivals, name); }
+    function taskCatalogAllowed(task) { return tombstoneAllowed(deletedTaskCatalog, taskCatalogRevivals, task); }
+    function goalAllowed(cat) { return tombstoneAllowed(deletedGoals, goalRevivals, cat); }
+    function goalKindAllowed(cat) { return tombstoneAllowed(deletedGoalKinds, goalKindRevivals, cat); }
+    function taskGoalAllowed(k) { return tombstoneAllowed(deletedTaskGoals, taskGoalRevivals, k); }
+    function archivedAllowed(name) { return tombstoneAllowed(deletedArchivedCategories, archivedCategoryRevivals, name); }
 
     var entries = (Array.isArray(raw.entries) ? raw.entries : []).map(function (e) {
       // `type` is the old field name, kept here so existing data still loads
@@ -690,14 +696,14 @@
     if (raw.goals && typeof raw.goals === "object") {
       Object.keys(raw.goals).forEach(function (k) {
         var v = Math.round(+raw.goals[k]);
-        if (k && v > 0) goals[k] = v;
+        if (k && v > 0 && goalAllowed(k)) goals[k] = v;
       });
     }
     // "invest" (spend more, green) is the default; only "limit" (spend less, red) is stored
     var goalKinds = {};
     if (raw.goalKinds && typeof raw.goalKinds === "object") {
       Object.keys(raw.goalKinds).forEach(function (k) {
-        if (k && raw.goalKinds[k] === "limit") goalKinds[k] = "limit";
+        if (k && raw.goalKinds[k] === "limit" && goalKindAllowed(k)) goalKinds[k] = "limit";
       });
     }
     // per-task daily budgets, keyed "category\ntask", in minutes
@@ -705,7 +711,7 @@
     if (raw.taskGoals && typeof raw.taskGoals === "object") {
       Object.keys(raw.taskGoals).forEach(function (k) {
         var v = Math.round(+raw.taskGoals[k]);
-        if (k && v > 0) taskGoals[k] = v;
+        if (k && v > 0 && taskGoalAllowed(k)) taskGoals[k] = v;
       });
     }
     // predefined task -> category mapping, used to autofill the category when
@@ -723,15 +729,20 @@
     var archivedCategories = {};
     if (raw.archivedCategories && typeof raw.archivedCategories === "object") {
       Object.keys(raw.archivedCategories).forEach(function (k) {
-        if (k && raw.archivedCategories[k]) archivedCategories[k] = true;
+        if (k && raw.archivedCategories[k] && archivedAllowed(k)) archivedCategories[k] = true;
       });
     }
 
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
-      archivedCategories: archivedCategories, deletedIds: deletedIds, deletedCategories: deletedCategories,
-      categoryRevivals: categoryRevivals, deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals
+      archivedCategories: archivedCategories, deletedIds: deletedIds,
+      deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
+      deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
+      deletedGoals: deletedGoals, goalRevivals: goalRevivals,
+      deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      deletedArchivedCategories: deletedArchivedCategories, archivedCategoryRevivals: archivedCategoryRevivals
     };
   }
 
@@ -748,36 +759,19 @@
   // copy's last edit. Settings maps (goals etc.) are simple unions.
   function mergeState(a, b) {
     a = a || emptyState(); b = b || emptyState();
-    var deletedIds = Object.assign({}, a.deletedIds, b.deletedIds);
-    Object.keys(a.deletedIds || {}).forEach(function (k) {
-      if (b.deletedIds && b.deletedIds[k]) {
-        deletedIds[k] = new Date(a.deletedIds[k]) > new Date(b.deletedIds[k]) ? a.deletedIds[k] : b.deletedIds[k];
-      }
-    });
-    var deletedCategories = Object.assign({}, a.deletedCategories, b.deletedCategories);
-    Object.keys(a.deletedCategories || {}).forEach(function (k) {
-      if (b.deletedCategories && b.deletedCategories[k]) {
-        deletedCategories[k] = new Date(a.deletedCategories[k]) > new Date(b.deletedCategories[k]) ? a.deletedCategories[k] : b.deletedCategories[k];
-      }
-    });
-    var categoryRevivals = Object.assign({}, a.categoryRevivals, b.categoryRevivals);
-    Object.keys(a.categoryRevivals || {}).forEach(function (k) {
-      if (b.categoryRevivals && b.categoryRevivals[k]) {
-        categoryRevivals[k] = new Date(a.categoryRevivals[k]) > new Date(b.categoryRevivals[k]) ? a.categoryRevivals[k] : b.categoryRevivals[k];
-      }
-    });
-    var deletedTaskCatalog = Object.assign({}, a.deletedTaskCatalog, b.deletedTaskCatalog);
-    Object.keys(a.deletedTaskCatalog || {}).forEach(function (k) {
-      if (b.deletedTaskCatalog && b.deletedTaskCatalog[k]) {
-        deletedTaskCatalog[k] = new Date(a.deletedTaskCatalog[k]) > new Date(b.deletedTaskCatalog[k]) ? a.deletedTaskCatalog[k] : b.deletedTaskCatalog[k];
-      }
-    });
-    var taskCatalogRevivals = Object.assign({}, a.taskCatalogRevivals, b.taskCatalogRevivals);
-    Object.keys(a.taskCatalogRevivals || {}).forEach(function (k) {
-      if (b.taskCatalogRevivals && b.taskCatalogRevivals[k]) {
-        taskCatalogRevivals[k] = new Date(a.taskCatalogRevivals[k]) > new Date(b.taskCatalogRevivals[k]) ? a.taskCatalogRevivals[k] : b.taskCatalogRevivals[k];
-      }
-    });
+    var deletedIds = mergeTimestamps(a.deletedIds, b.deletedIds);
+    var deletedCategories = mergeTimestamps(a.deletedCategories, b.deletedCategories);
+    var categoryRevivals = mergeTimestamps(a.categoryRevivals, b.categoryRevivals);
+    var deletedTaskCatalog = mergeTimestamps(a.deletedTaskCatalog, b.deletedTaskCatalog);
+    var taskCatalogRevivals = mergeTimestamps(a.taskCatalogRevivals, b.taskCatalogRevivals);
+    var deletedGoals = mergeTimestamps(a.deletedGoals, b.deletedGoals);
+    var goalRevivals = mergeTimestamps(a.goalRevivals, b.goalRevivals);
+    var deletedGoalKinds = mergeTimestamps(a.deletedGoalKinds, b.deletedGoalKinds);
+    var goalKindRevivals = mergeTimestamps(a.goalKindRevivals, b.goalKindRevivals);
+    var deletedTaskGoals = mergeTimestamps(a.deletedTaskGoals, b.deletedTaskGoals);
+    var taskGoalRevivals = mergeTimestamps(a.taskGoalRevivals, b.taskGoalRevivals);
+    var deletedArchivedCategories = mergeTimestamps(a.deletedArchivedCategories, b.deletedArchivedCategories);
+    var archivedCategoryRevivals = mergeTimestamps(a.archivedCategoryRevivals, b.archivedCategoryRevivals);
 
     var byId = {};
     (a.entries || []).concat(b.entries || []).forEach(function (e) {
@@ -795,7 +789,11 @@
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
       archivedCategories: Object.assign({}, a.archivedCategories, b.archivedCategories),
       deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
-      deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals
+      deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
+      deletedGoals: deletedGoals, goalRevivals: goalRevivals,
+      deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
+      deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      deletedArchivedCategories: deletedArchivedCategories, archivedCategoryRevivals: archivedCategoryRevivals
     });
   }
 
@@ -1651,25 +1649,41 @@
       return s;
     });
   }
+  // sets map[key] = value and revives it out of any prior tombstone, or (when
+  // value is undefined) clears it and writes a fresh tombstone — the mutation
+  // side of the parseTimestamps/tombstoneAllowed/mergeTimestamps protection
+  // above, for a plain settings map merged by union
+  function setTombstoned(s, mapField, deletedField, revivalField, key, value) {
+    var iso = new Date().toISOString();
+    s[mapField] = Object.assign({}, s[mapField]);
+    if (value === undefined) {
+      delete s[mapField][key];
+      s[deletedField] = Object.assign({}, s[deletedField]);
+      s[deletedField][key] = iso;
+    } else {
+      s[mapField][key] = value;
+      if (key in s[deletedField]) {
+        s[revivalField] = Object.assign({}, s[revivalField]);
+        s[revivalField][key] = iso;
+      }
+    }
+  }
   function setGoal(category, mins) {
     queueMutation(function (s) {
-      s.goals = Object.assign({}, s.goals);
-      if (mins > 0) s.goals[category] = mins; else delete s.goals[category];
+      setTombstoned(s, "goals", "deletedGoals", "goalRevivals", category, mins > 0 ? mins : undefined);
       return s;
     });
   }
   function setGoalKind(category, kind) {
     queueMutation(function (s) {
-      s.goalKinds = Object.assign({}, s.goalKinds);
-      if (kind === "limit") s.goalKinds[category] = "limit"; else delete s.goalKinds[category];
+      setTombstoned(s, "goalKinds", "deletedGoalKinds", "goalKindRevivals", category, kind === "limit" ? "limit" : undefined);
       return s;
     });
   }
   function setTaskGoal(category, task, mins) {
     var k = taskKey(category, task);
     queueMutation(function (s) {
-      s.taskGoals = Object.assign({}, s.taskGoals);
-      if (mins > 0) s.taskGoals[k] = mins; else delete s.taskGoals[k];
+      setTombstoned(s, "taskGoals", "deletedTaskGoals", "taskGoalRevivals", k, mins > 0 ? mins : undefined);
       return s;
     });
   }
@@ -1798,15 +1812,13 @@
   // has logged entries, so past reports keep showing it
   function archiveCategory(name) {
     queueMutation(function (s) {
-      s.archivedCategories = Object.assign({}, s.archivedCategories);
-      s.archivedCategories[name] = true;
+      setTombstoned(s, "archivedCategories", "deletedArchivedCategories", "archivedCategoryRevivals", name, true);
       return s;
     });
   }
   function unarchiveCategory(name) {
     queueMutation(function (s) {
-      s.archivedCategories = Object.assign({}, s.archivedCategories);
-      delete s.archivedCategories[name];
+      setTombstoned(s, "archivedCategories", "deletedArchivedCategories", "archivedCategoryRevivals", name, undefined);
       return s;
     });
   }
