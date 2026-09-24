@@ -339,7 +339,8 @@
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-card);
     padding: 0.8rem 0.9rem; margin-bottom: 0.6rem; box-shadow: var(--shadow-soft);
   }
-  .entry-head { display: flex; align-items: flex-start; gap: 0.7rem; cursor: pointer; }
+  .entry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.7rem; cursor: pointer; }
+  .entry-left { display: flex; align-items: flex-start; gap: 0.7rem; min-width: 0; flex-shrink: 1; }
   .entry-time {
     font-family: "JetBrains Mono", monospace; flex-shrink: 0;
     display: flex; flex-direction: column; align-items: stretch; text-align: center;
@@ -361,7 +362,7 @@
     font-size: 0.75rem; line-height: 1; padding: 0; opacity: 0.9;
   }
   .entry.alongside { margin-left: 1.4rem; border-left: 3px solid var(--accent-soft-line); }
-  .entry-main { flex: 1; min-width: 0; }
+  .entry-main { min-width: 0; }
   .entry-cat-total {
     flex-shrink: 0; align-self: center; font-family: "JetBrains Mono", monospace;
     font-size: 0.95rem; font-weight: 700; white-space: nowrap; text-align: right;
@@ -2079,10 +2080,12 @@
         : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
-          '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
-          '<span class="entry-main">' +
-            '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
-            (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
+          '<span class="entry-left">' +
+            '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
+            '<span class="entry-main">' +
+              '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
+              (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
+            "</span>" +
           "</span>" +
           focusHtml +
           catTotalHtml +
