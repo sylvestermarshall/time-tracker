@@ -236,6 +236,11 @@
     width: 1.7rem; height: 1.7rem; border-radius: var(--radius-pill); flex-shrink: 0; cursor: grab;
     font-size: 0.85rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
   }
+  .goal-move svg { width: 1rem; height: 1rem; }
+  /* touch-action: none keeps the browser from hijacking the gesture as a page
+     scroll the instant a finger lands on the handle, so pointermove reorder
+     logic gets every move event */
+  .chip-drag { touch-action: none; }
   .goal-cat { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 0.6rem; font-weight: 700; }
   .goal-cat-name { min-width: 0; overflow-wrap: break-word; }
   .goal-row .goal-input {
@@ -555,6 +560,11 @@
     <div id="menuList"></div>
   </div>
 
+  <!-- CHIPS: reorder / remove the log form's quick-pick chips -->
+  <div id="chipsPage" hidden>
+    <div id="chipsList"></div>
+  </div>
+
   <!-- COMPARE: two dates, up to 3 categories, cumulative time-of-day charts -->
   <div id="comparePage" hidden>
     <div id="compareBody"></div>
@@ -787,6 +797,12 @@
   function emptyState() {
     return {
       entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {},
+      // manual order / hide-from-chips for the log form's quick-pick chips —
+      // a display preference, not catalog data, so it's kept separate from
+      // taskCatalog/categories and needs no tombstone: hiding is a plain list,
+      // and re-creating the same name elsewhere (reviveChipHidden) undoes it
+      chipOrder: { categories: [], tasks: [] },
+      chipHidden: { categories: [], tasks: [] },
       deletedIds: {},
       deletedCategories: {}, categoryRevivals: {},
       deletedTaskCatalog: {}, taskCatalogRevivals: {},
@@ -934,9 +950,22 @@
       .map(function (s) { return { id: s.id, entryId: s.entryId, at: new Date(s.at).toISOString() }; })
       .sort(function (a, b) { return new Date(a.at) - new Date(b.at); });
 
+    function sanitizeNameList(arr) {
+      return uniq((Array.isArray(arr) ? arr : []).filter(function (n) { return typeof n === "string" && n; }));
+    }
+    var chipOrder = {
+      categories: sanitizeNameList(raw.chipOrder && raw.chipOrder.categories),
+      tasks: sanitizeNameList(raw.chipOrder && raw.chipOrder.tasks)
+    };
+    var chipHidden = {
+      categories: sanitizeNameList(raw.chipHidden && raw.chipHidden.categories),
+      tasks: sanitizeNameList(raw.chipHidden && raw.chipHidden.tasks)
+    };
+
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
+      chipOrder: chipOrder, chipHidden: chipHidden,
       deletedIds: deletedIds,
       deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
@@ -985,6 +1014,7 @@
     (a.focusSwitches || []).concat(b.focusSwitches || []).forEach(function (s) { switchesById[s.id] = s; });
     var focusSwitches = Object.keys(switchesById).map(function (k) { return switchesById[k]; });
 
+    function mergeOrder(x, y) { return uniq((x || []).concat(y || [])); }
     return normalizeState({
       entries: entries,
       categories: uniq((a.categories || []).concat(b.categories || [])),
@@ -992,6 +1022,14 @@
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
       taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
+      chipOrder: {
+        categories: mergeOrder((a.chipOrder || {}).categories, (b.chipOrder || {}).categories),
+        tasks: mergeOrder((a.chipOrder || {}).tasks, (b.chipOrder || {}).tasks)
+      },
+      chipHidden: {
+        categories: mergeOrder((a.chipHidden || {}).categories, (b.chipHidden || {}).categories),
+        tasks: mergeOrder((a.chipHidden || {}).tasks, (b.chipHidden || {}).tasks)
+      },
       deletedIds: deletedIds, deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
       deletedTaskCatalog: deletedTaskCatalog, taskCatalogRevivals: taskCatalogRevivals,
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
@@ -1349,6 +1387,8 @@
       route = "categories";
     } else if (h === "menu") {
       route = "menu";
+    } else if (h === "chips") {
+      route = "chips";
     } else if (h === "compare") {
       route = "compare";
     } else if (h === "comparedetail" && compareDetailCat) {
@@ -1366,8 +1406,9 @@
     var isHome = route === "home", isGoals = route === "goals", isOverview = route === "overview";
     var isCategories = route === "categories", isMenu = route === "menu", isCompare = route === "compare";
     var isCompareDetail = route === "compareDetail";
+    var isChips = route === "chips";
     var dated = route === "day" || isOverview;
-    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail;
+    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
@@ -1376,6 +1417,7 @@
     document.getElementById("overviewPage").hidden = !isOverview;
     document.getElementById("categoriesPage").hidden = !isCategories;
     document.getElementById("menuPage").hidden = !isMenu;
+    document.getElementById("chipsPage").hidden = !isChips;
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
@@ -1390,6 +1432,7 @@
   function goToTasks() { location.hash = "#tasks"; }
   function goToCategories() { location.hash = "#categories"; }
   function goToMenu() { location.hash = "#menu"; }
+  function goToChips() { location.hash = "#chips"; }
   function goToCompare() { location.hash = "#compare"; }
   function goToCompareDetail(cat) { compareDetailCat = cat; location.hash = "#comparedetail"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
@@ -1413,6 +1456,7 @@
     if (route === "overview") { renderHeads(); renderOverview(); return; }
     if (route === "categories") { renderCategories(); return; }
     if (route === "menu") { renderMenu(); return; }
+    if (route === "chips") { renderChipsPage(); return; }
     if (route === "compare") { renderCompare(); return; }
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
@@ -1595,7 +1639,8 @@
   var MENU_ITEMS = [
     { act: "menu-overview", icon: "bar-chart-2", label: "Overview", go: function () { goToOverview(); } },
     { act: "menu-goals", icon: "target", label: "Goals", go: goToGoals },
-    { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks }
+    { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
+    { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -1606,6 +1651,35 @@
         '<i data-lucide="chevron-right"></i>' +
       "</div>";
     }).join("");
+  }
+
+  // ---------- quick-pick chips page: reorder / remove the log form's chips ----------
+  function renderChipsPage() {
+    document.getElementById("pageTitle").textContent = "Quick-pick chips";
+    var box = document.getElementById("chipsList");
+    function chipRow(name) {
+      return '<div class="goal-row" data-name="' + escapeHtml(name) + '">' +
+        '<button type="button" class="goal-move chip-drag" aria-label="Drag to reorder" title="Drag to reorder">' +
+          '<i data-lucide="grip-vertical"></i></button>' +
+        '<span class="goal-cat"><span class="goal-cat-name">' + escapeHtml(name) + "</span></span>" +
+        '<button type="button" class="btn btn-ghost btn-small" data-act="delete-chip">Remove</button>' +
+      "</div>";
+    }
+    function section(kind, label, sub, names) {
+      return '<div class="goal-section">' +
+        '<div class="goal-section-label">' + label + "</div>" +
+        '<div class="goal-section-sub">' + sub + "</div>" +
+        '<div class="chip-order-list" data-kind="' + kind + '">' +
+          (names.length ? names.map(chipRow).join("") : '<div class="goal-section-hint">Nothing here yet.</div>') +
+        "</div>" +
+      "</div>";
+    }
+    var taskNames = orderedNames(visibleNames("tasks", allTaskNames()), state.chipOrder.tasks, taskCounts());
+    var catNames = orderedNames(visibleNames("categories", manageableCategories()), state.chipOrder.categories, categoryCounts());
+    box.innerHTML =
+      '<p class="goals-intro">Drag the handle on the left to set the order these show up on the log form — most-used-first until you rearrange. Remove one you don’t want; it comes back on its own the next time you log or add it again.</p>' +
+      section("tasks", "Task chips", "Shown above the Tasks field.", taskNames) +
+      section("categories", "Category chips", "Shown above the Category field.", catNames);
   }
 
   // ---------- compare page ----------
@@ -2175,6 +2249,8 @@
         createdAt: now, updatedAt: now
       });
       if (category && s.categories.indexOf(category) < 0) s.categories.push(category);
+      reviveChipHidden(s, "categories", category);
+      reviveChipHidden(s, "tasks", task.trim());
       return s;
     });
   }
@@ -2288,12 +2364,22 @@
     s.taskCatalogRevivals = Object.assign({}, s.taskCatalogRevivals);
     s.taskCatalogRevivals[task] = new Date().toISOString();
   }
+  // a chip you removed from the quick-pick row comes back the moment you use
+  // or (re-)create that same name again, no separate "restore" step needed
+  function reviveChipHidden(s, kind, name) {
+    if (!name) return;
+    var arr = (s.chipHidden && s.chipHidden[kind]) || [];
+    if (arr.indexOf(name) === -1) return;
+    s.chipHidden = Object.assign({}, s.chipHidden);
+    s.chipHidden[kind] = arr.filter(function (n) { return n !== name; });
+  }
   function addCategoryOnly(name) {
     name = name.trim();
     if (!name) return;
     queueMutation(function (s) {
       if (s.categories.indexOf(name) < 0) s.categories = s.categories.concat([name]);
       reviveCategory(s, name);
+      reviveChipHidden(s, "categories", name);
       return s;
     });
   }
@@ -2306,6 +2392,8 @@
       if (s.categories.indexOf(category) < 0) s.categories = s.categories.concat([category]);
       reviveCategory(s, category);
       reviveTaskCatalog(s, task);
+      reviveChipHidden(s, "tasks", task);
+      reviveChipHidden(s, "categories", category);
       return s;
     });
   }
@@ -2593,8 +2681,11 @@
     chooseTask(item.dataset.name, item.dataset.cat);
   });
 
-  // quick-pick chips: the most-used tasks/categories, most-used first, one
-  // tap fills the field (and advances/dismisses the keyboard same as chooseTask/chooseCategory)
+  // quick-pick chips: every category/task you've defined or ever logged,
+  // minus ones you've removed on the "Quick-pick chips" menu page. Order is
+  // most-used-first until you drag them into a manual order there, at which
+  // point that order wins (with anything not yet placed trailing after it,
+  // most-used-first) — see orderedNames.
   var taskChips = document.getElementById("taskChips");
   var categoryChips = document.getElementById("categoryChips");
   function taskCounts() {
@@ -2602,26 +2693,54 @@
     state.entries.forEach(function (e) { if (e.task) counts[e.task] = (counts[e.task] || 0) + 1; });
     return counts;
   }
-  // chips cover every category you've defined (Categories page) or ever
-  // logged, not just ones you've used — most-used first, unused ones
-  // (freshly created) trail alphabetically
+  function allTaskNames() {
+    var names = {};
+    Object.keys(state.taskCatalog).forEach(function (t) { names[t] = true; });
+    Object.keys(taskCounts()).forEach(function (t) { names[t] = true; });
+    return Object.keys(names);
+  }
+  function visibleNames(kind, names) {
+    var hidden = state.chipHidden[kind] || [];
+    return names.filter(function (n) { return hidden.indexOf(n) === -1; });
+  }
+  function orderedNames(names, order, counts) {
+    var known = order.filter(function (n) { return names.indexOf(n) !== -1; });
+    var knownSet = {};
+    known.forEach(function (n) { knownSet[n] = true; });
+    var extra = names.filter(function (n) { return !knownSet[n]; })
+      .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); });
+    return known.concat(extra);
+  }
+  function setChipOrder(kind, order) {
+    queueMutation(function (s) {
+      var co = Object.assign({}, s.chipOrder);
+      co[kind] = order.slice();
+      s.chipOrder = co;
+      return s;
+    });
+  }
+  function hideChip(kind, name) {
+    queueMutation(function (s) {
+      var ch = Object.assign({}, s.chipHidden);
+      var arr = (ch[kind] || []).slice();
+      if (arr.indexOf(name) === -1) arr.push(name);
+      ch[kind] = arr;
+      s.chipHidden = ch;
+      return s;
+    });
+  }
   function renderCategoryChips() {
     var counts = categoryCounts();
-    var top = manageableCategories()
-      .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); });
+    var names = visibleNames("categories", manageableCategories());
+    var top = orderedNames(names, state.chipOrder.categories, counts);
     categoryChips.innerHTML = top.map(function (c) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
     }).join("");
   }
-  // chips cover every task in the catalog (Categories page > task library)
-  // or ever logged, not just ones you've used
   function renderTaskChips() {
     var counts = taskCounts();
-    var names = {};
-    Object.keys(state.taskCatalog).forEach(function (t) { names[t] = true; });
-    Object.keys(counts).forEach(function (t) { names[t] = true; });
-    var top = Object.keys(names)
-      .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); });
+    var names = visibleNames("tasks", allTaskNames());
+    var top = orderedNames(names, state.chipOrder.tasks, counts);
     taskChips.innerHTML = top.map(function (t) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
     }).join("");
@@ -2869,6 +2988,56 @@
       addTaskCatalog(ev.target.value, ev.target.closest(".goal-section").dataset.cat);
     }
   });
+
+  // ---------- quick-pick chips page: drag reorder + remove ----------
+  // Pointer Events (not HTML5 dragstart/dragover, which touchscreens don't
+  // fire) so this works with a finger, not just a mouse. Listeners live on
+  // the static #chipsList container, not the rows renderChipsPage() rebuilds
+  // each render, so they never need re-attaching.
+  (function () {
+    var chipsList = document.getElementById("chipsList");
+    var dragEl = null, dragList = null, pointerId = null;
+
+    chipsList.addEventListener("pointerdown", function (ev) {
+      var handle = ev.target.closest(".chip-drag");
+      if (!handle) return;
+      var row = handle.closest(".goal-row");
+      var list = handle.closest(".chip-order-list");
+      if (!row || !list) return;
+      dragEl = row; dragList = list; pointerId = ev.pointerId;
+      dragEl.classList.add("dragging");
+      try { handle.setPointerCapture(pointerId); } catch (e) {}
+      ev.preventDefault();
+    });
+    chipsList.addEventListener("pointermove", function (ev) {
+      if (!dragEl || ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      var overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+      overEl = overEl && overEl.closest(".goal-row");
+      if (!overEl || overEl === dragEl || overEl.parentNode !== dragList) return;
+      var rect = overEl.getBoundingClientRect();
+      var before = ev.clientY < rect.top + rect.height / 2;
+      dragList.insertBefore(dragEl, before ? overEl : overEl.nextSibling);
+    });
+    function endDrag(ev) {
+      if (!dragEl || ev.pointerId !== pointerId) return;
+      dragEl.classList.remove("dragging");
+      var kind = dragList.dataset.kind;
+      var names = Array.prototype.map.call(dragList.querySelectorAll(".goal-row"), function (r) { return r.dataset.name; });
+      dragEl = null; dragList = null; pointerId = null;
+      setChipOrder(kind, names);
+    }
+    chipsList.addEventListener("pointerup", endDrag);
+    chipsList.addEventListener("pointercancel", endDrag);
+
+    chipsList.addEventListener("click", function (ev) {
+      var btn = ev.target.closest('[data-act="delete-chip"]');
+      if (!btn) return;
+      var row = btn.closest(".goal-row");
+      var kind = row.closest(".chip-order-list").dataset.kind;
+      hideChip(kind, row.dataset.name);
+    });
+  })();
 
   // keep the "now" ticking while an entry is still running
   setInterval(function () {
