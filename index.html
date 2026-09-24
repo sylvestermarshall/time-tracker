@@ -160,6 +160,21 @@
   .ac-item:hover, .ac-item.active { background: var(--accent-soft); color: var(--accent); }
   .ac-item .cnt { color: var(--ink-faint); font-size: 0.78rem; }
 
+  /* quick-pick chips: most-used tasks/categories, tap instead of typing */
+  .chip-row {
+    display: flex; gap: 0.4rem; overflow-x: auto; margin-bottom: 0.45rem;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .chip-row::-webkit-scrollbar { display: none; }
+  .chip-row:empty { display: none; }
+  .chip {
+    flex: 0 0 auto; font: inherit; font-size: 0.82rem; font-weight: 600;
+    color: var(--ink-soft); background: var(--surface-raised);
+    border: 1px solid var(--line); border-radius: var(--radius-pill);
+    padding: 0.38rem 0.8rem; cursor: pointer; white-space: nowrap;
+  }
+  .chip:active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
   /* ---------- day navigation ---------- */
   .daynav { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; }
   .daynav .date-label { font-weight: 700; font-size: 1rem; flex: 1; }
@@ -465,20 +480,24 @@
         <label class="lbl" for="f-time"><i data-lucide="clock"></i>Start time</label>
         <div class="time-wrap">
           <input type="text" id="f-time" class="time-in" inputmode="numeric" autocomplete="off"
-                 maxlength="5" placeholder="0930" aria-label="Start time, 24-hour, type four digits" required>
+                 maxlength="5" placeholder="0930" aria-label="Start time, 24-hour, type four digits" required
+                 enterkeyhint="next">
           <button type="button" class="btn btn-ghost btn-small" id="nowBtn">Now</button>
           <button type="button" class="btn btn-ghost btn-small" id="agoBtn" title="Tap to step back a minute at a time">1 min ago</button>
         </div>
       </div>
       <div class="field">
         <label class="lbl" for="f-task"><i data-lucide="zap"></i>Tasks</label>
+        <div class="chip-row" id="taskChips"></div>
         <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required
-               role="combobox" aria-autocomplete="list" aria-expanded="false">
+               enterkeyhint="next" role="combobox" aria-autocomplete="list" aria-expanded="false">
         <div class="ac-list" id="taskAc" hidden></div>
       </div>
       <div class="field">
         <label class="lbl" for="f-category"><i data-lucide="layout-grid"></i>Category</label>
-        <input type="text" id="f-category" placeholder="e.g. Work" role="combobox" aria-autocomplete="list" aria-expanded="false">
+        <div class="chip-row" id="categoryChips"></div>
+        <input type="text" id="f-category" placeholder="e.g. Work" enterkeyhint="done"
+               role="combobox" aria-autocomplete="list" aria-expanded="false">
         <div class="ac-list" id="categoryAc" hidden></div>
       </div>
       <label class="check-row">
@@ -486,7 +505,7 @@
       </label>
       <div class="field" id="f-end-field" hidden>
         <label class="lbl" for="f-end">End time <span class="opt">— optional, blank means ongoing</span></label>
-        <input type="text" id="f-end" class="time-in" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="ongoing">
+        <input type="text" id="f-end" class="time-in" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="ongoing" enterkeyhint="done">
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="logBtn"><i data-lucide="play"></i>Log entry</button>
@@ -1386,6 +1405,7 @@
   function render() {
     renderInner();
     updateTabbar();
+    renderAddFormChips();
     if (window.lucide) lucide.createIcons();
   }
   function renderInner() {
@@ -2402,6 +2422,12 @@
       if (t) { fTime.value = t; fTask.focus(); }
     }
   });
+  // return key advances to the next field instead of doing nothing
+  fTime.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    fTask.focus();
+  });
 
   var fConcurrent = document.getElementById("f-concurrent");
   var fEnd = document.getElementById("f-end");
@@ -2445,10 +2471,14 @@
   // category autocomplete
   var acList = document.getElementById("categoryAc");
   var acActive = -1;
-  function acMatches() {
-    var q = fCat.value.trim().toLowerCase();
+  function categoryCounts() {
     var counts = {};
     state.entries.forEach(function (e) { if (e.category) counts[e.category] = (counts[e.category] || 0) + 1; });
+    return counts;
+  }
+  function acMatches() {
+    var q = fCat.value.trim().toLowerCase();
+    var counts = categoryCounts();
     return manageableCategories()
       .filter(function (c) { return !q || c.toLowerCase().indexOf(q) >= 0; })
       .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); })
@@ -2483,12 +2513,18 @@
     else return;
     items.forEach(function (el, i) { el.classList.toggle("active", i === acActive); });
   });
+  function chooseCategory(name) {
+    fCat.value = name;
+    hideAc();
+    // that's the last field in the usual flow — dismiss the keyboard so
+    // Log entry is visible right away instead of needing a scroll
+    fCat.blur();
+  }
   acList.addEventListener("mousedown", function (ev) {
     var item = ev.target.closest(".ac-item");
     if (!item) return;
     ev.preventDefault();
-    fCat.value = item.dataset.name;
-    hideAc();
+    chooseCategory(item.dataset.name);
   });
 
   // task autocomplete, from the task catalog set up on the Categories page —
@@ -2522,18 +2558,30 @@
   function hideTaskAc() { taskAc.hidden = true; taskAcActive = -1; fTask.setAttribute("aria-expanded", "false"); }
   function chooseTask(name, cat) {
     fTask.value = name;
-    if (cat) fCat.value = cat;
     hideTaskAc();
+    if (cat) {
+      fCat.value = cat;
+      // category came along for free — dismiss the keyboard so Log entry
+      // is visible right away instead of needing a scroll
+      fTask.blur();
+    } else {
+      fCat.focus();
+    }
   }
   fTask.addEventListener("input", showTaskAc);
   fTask.addEventListener("focus", showTaskAc);
   fTask.addEventListener("blur", function () { setTimeout(hideTaskAc, 120); });
   fTask.addEventListener("keydown", function (ev) {
-    if (taskAc.hidden) return;
+    if (taskAc.hidden) {
+      // no suggestions open — return key just advances to Category
+      if (ev.key === "Enter" && fTask.value.trim()) { ev.preventDefault(); fCat.focus(); }
+      return;
+    }
     var items = taskAc.querySelectorAll(".ac-item");
     if (ev.key === "ArrowDown") { ev.preventDefault(); taskAcActive = Math.min(taskAcActive + 1, items.length - 1); }
     else if (ev.key === "ArrowUp") { ev.preventDefault(); taskAcActive = Math.max(taskAcActive - 1, 0); }
     else if (ev.key === "Enter" && taskAcActive >= 0) { ev.preventDefault(); chooseTask(items[taskAcActive].dataset.name, items[taskAcActive].dataset.cat); return; }
+    else if (ev.key === "Enter") { ev.preventDefault(); hideTaskAc(); if (fTask.value.trim()) fCat.focus(); return; }
     else if (ev.key === "Escape") { hideTaskAc(); return; }
     else return;
     items.forEach(function (el, i) { el.classList.toggle("active", i === taskAcActive); });
@@ -2543,6 +2591,47 @@
     if (!item) return;
     ev.preventDefault();
     chooseTask(item.dataset.name, item.dataset.cat);
+  });
+
+  // quick-pick chips: the most-used tasks/categories, most-used first, one
+  // tap fills the field (and advances/dismisses the keyboard same as chooseTask/chooseCategory)
+  var taskChips = document.getElementById("taskChips");
+  var categoryChips = document.getElementById("categoryChips");
+  function taskCounts() {
+    var counts = {};
+    state.entries.forEach(function (e) { if (e.task) counts[e.task] = (counts[e.task] || 0) + 1; });
+    return counts;
+  }
+  function renderCategoryChips() {
+    var counts = categoryCounts();
+    var top = manageableCategories()
+      .filter(function (c) { return counts[c]; })
+      .sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); })
+      .slice(0, 8);
+    categoryChips.innerHTML = top.map(function (c) {
+      return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
+    }).join("");
+  }
+  function renderTaskChips() {
+    var counts = taskCounts();
+    var top = Object.keys(counts)
+      .sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); })
+      .slice(0, 8);
+    taskChips.innerHTML = top.map(function (t) {
+      return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
+    }).join("");
+  }
+  function renderAddFormChips() { renderCategoryChips(); renderTaskChips(); }
+  categoryChips.addEventListener("click", function (ev) {
+    var chip = ev.target.closest(".chip");
+    if (!chip) return;
+    chooseCategory(chip.dataset.name);
+  });
+  taskChips.addEventListener("click", function (ev) {
+    var chip = ev.target.closest(".chip");
+    if (!chip) return;
+    var name = chip.dataset.name;
+    chooseTask(name, state.taskCatalog[name]);
   });
 
   // ---------- timeline interactions ----------
