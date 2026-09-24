@@ -583,6 +583,11 @@
     <div id="chipsList"></div>
   </div>
 
+  <!-- TREND: one category's daily total across a custom date range -->
+  <div id="trendPage" hidden>
+    <div id="trendBody"></div>
+  </div>
+
   <!-- COMPARE: two dates, up to 3 categories, cumulative time-of-day charts -->
   <div id="comparePage" hidden>
     <div id="compareBody"></div>
@@ -665,6 +670,11 @@
   var compareDateB = todayKey();
   var compareCats = [];
   var compareDetailCat = "";
+  // trend route: one category's daily total across a date range, defaulting
+  // to the last 7 days so there's something to look at immediately
+  var trendCat = "";
+  var trendEnd = todayKey();
+  var trendStart = dateKey(new Date(Date.now() - 6 * 86400000));
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -1407,6 +1417,8 @@
       route = "menu";
     } else if (h === "chips") {
       route = "chips";
+    } else if (h === "trend") {
+      route = "trend";
     } else if (h === "compare") {
       route = "compare";
     } else if (h === "comparedetail" && compareDetailCat) {
@@ -1425,8 +1437,9 @@
     var isCategories = route === "categories", isMenu = route === "menu", isCompare = route === "compare";
     var isCompareDetail = route === "compareDetail";
     var isChips = route === "chips";
+    var isTrend = route === "trend";
     var dated = route === "day" || isOverview;
-    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips;
+    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
@@ -1436,6 +1449,7 @@
     document.getElementById("categoriesPage").hidden = !isCategories;
     document.getElementById("menuPage").hidden = !isMenu;
     document.getElementById("chipsPage").hidden = !isChips;
+    document.getElementById("trendPage").hidden = !isTrend;
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
@@ -1451,6 +1465,7 @@
   function goToCategories() { location.hash = "#categories"; }
   function goToMenu() { location.hash = "#menu"; }
   function goToChips() { location.hash = "#chips"; }
+  function goToTrend() { location.hash = "#trend"; }
   function goToCompare() { location.hash = "#compare"; }
   function goToCompareDetail(cat) { compareDetailCat = cat; location.hash = "#comparedetail"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
@@ -1475,6 +1490,7 @@
     if (route === "categories") { renderCategories(); return; }
     if (route === "menu") { renderMenu(); return; }
     if (route === "chips") { renderChipsPage(); return; }
+    if (route === "trend") { renderTrend(); return; }
     if (route === "compare") { renderCompare(); return; }
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
@@ -1525,6 +1541,36 @@
       }
     });
     return out;
+  }
+
+  // every day key from startK to endK inclusive, ascending — [] if the range
+  // is reversed (start after end)
+  function trendDayKeys(startK, endK) {
+    var out = [];
+    var d = keyToDate(startK), end = keyToDate(endK);
+    if (d > end) return out;
+    while (d <= end) {
+      out.push(dateKey(d));
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+  // total minutes logged under `cat` on a single day — main + alongside
+  // entries both count (matches how Overview's byCat totals work), and an
+  // entry still running today counts up to now, same as durMs in renderOverview
+  function categoryMinutesForDay(dayK, cat) {
+    var isToday = dayK === todayKey();
+    var now = Date.now();
+    var ms = 0;
+    rowsForDay(dayK).forEach(function (r) {
+      if (r.entry.stop) return;
+      if ((r.entry.category || "—") !== cat) return;
+      var s = new Date(r.entry.startAt).getTime();
+      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+      if (e == null) return;
+      ms += Math.max(0, e - s);
+    });
+    return Math.round(ms / 60000);
   }
 
   function renderGoals() {
@@ -1658,7 +1704,8 @@
     { act: "menu-overview", icon: "bar-chart-2", label: "Overview", go: function () { goToOverview(); } },
     { act: "menu-goals", icon: "target", label: "Goals", go: goToGoals },
     { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
-    { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips }
+    { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
+    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -1847,6 +1894,79 @@
         return compareChartCardHtml(c, compareSeries(compareDateA, c), compareSeries(compareDateB, c));
       }).join("");
     }
+    box.innerHTML = html;
+  }
+
+  // ---------- trend page: one category's daily total across a date range ----------
+  function renderTrend() {
+    document.getElementById("pageTitle").textContent = "Category trend";
+    var box = document.getElementById("trendBody");
+    var cats = manageableCategories().sort(function (a, b) { return a.localeCompare(b); });
+
+    var html = '<p class="goals-intro">Pick a category and a date range to see how much time you spent on it, day by day.</p>';
+
+    if (!cats.length) {
+      html += '<p class="goals-empty">No categories yet — log a few entries first.</p>';
+      box.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="compare-cats">' + cats.map(function (c) {
+      var selected = trendCat === c;
+      return '<button type="button" class="compare-chip' + (selected ? " selected" : "") + '" data-cat="' + escapeHtml(c) + '">' +
+        iconBadgeHtml(c, true) + escapeHtml(c) + "</button>";
+    }).join("") + "</div>";
+
+    html += '<div class="row">' +
+        '<div class="field" style="flex:1"><label class="lbl" for="trendStartInput">From</label>' +
+          '<input type="date" id="trendStartInput" value="' + escapeHtml(trendStart) + '" max="' + escapeHtml(todayKey()) + '"></div>' +
+        '<div class="field" style="flex:1"><label class="lbl" for="trendEndInput">To</label>' +
+          '<input type="date" id="trendEndInput" value="' + escapeHtml(trendEnd) + '" max="' + escapeHtml(todayKey()) + '"></div>' +
+      "</div>" +
+      '<div class="row" style="gap:0.5rem;margin:-0.3rem 0 1rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" data-preset="7">Last 7 days</button>' +
+        '<button type="button" class="btn btn-ghost btn-small" data-preset="30">Last 30 days</button>' +
+      "</div>";
+
+    if (!trendCat) {
+      html += '<p class="compare-empty">Pick a category above.</p>';
+      box.innerHTML = html;
+      return;
+    }
+
+    var days = trendDayKeys(trendStart, trendEnd);
+    if (!days.length) {
+      html += '<p class="compare-empty">The "from" date has to be on or before the "to" date.</p>';
+      box.innerHTML = html;
+      return;
+    }
+
+    var perDay = days.map(function (dk) { return { day: dk, mins: categoryMinutesForDay(dk, trendCat) }; });
+    var totalMins = perDay.reduce(function (s, x) { return s + x.mins; }, 0);
+    var activeDays = perDay.filter(function (x) { return x.mins > 0; }).length;
+    var avgMins = Math.round(totalMins / perDay.length);
+    var maxMins = Math.max.apply(null, [1].concat(perDay.map(function (x) { return x.mins; })));
+
+    html += '<div class="ov-gist">' +
+      "You spent <b>" + fmtMins(totalMins) + "</b> on <b>" + escapeHtml(trendCat) + "</b> across " +
+        perDay.length + " day" + (perDay.length === 1 ? "" : "s") + "." +
+      '<div class="ov-gist-line">' + fmtMins(avgMins) + " a day on average · active on " + activeDays + " of " + perDay.length + " days.</div>" +
+    "</div>";
+
+    html += '<div class="ov-section-label">Day by day</div>' +
+      perDay.map(function (x) {
+        var pct = Math.max(x.mins > 0 ? 3 : 0, Math.min(100, x.mins / maxMins * 100));
+        var label = keyToDate(x.day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+        if (x.day === todayKey()) label += " (today)";
+        return '<div class="ov-row">' +
+          '<div class="ov-row-head">' +
+            '<span class="ov-row-name">' + escapeHtml(label) + "</span>" +
+            '<span class="ov-row-nums">' + fmtMins(x.mins) + "</span>" +
+          "</div>" +
+          '<div class="ov-track"><span class="ov-fill" style="width:' + pct + "%;background:" + catColor(trendCat) + '"></span></div>' +
+        "</div>";
+      }).join("");
+
     box.innerHTML = html;
   }
 
@@ -2890,6 +3010,29 @@
   compareBody.addEventListener("change", function (ev) {
     if (ev.target.id === "compareDateA") { compareDateA = ev.target.value; render(); }
     else if (ev.target.id === "compareDateB") { compareDateB = ev.target.value || todayKey(); render(); }
+  });
+
+  // ---------- trend page ----------
+  var trendBody = document.getElementById("trendBody");
+  trendBody.addEventListener("click", function (ev) {
+    var chip = ev.target.closest(".compare-chip");
+    if (chip) {
+      var cat = chip.dataset.cat;
+      trendCat = trendCat === cat ? "" : cat;
+      render();
+      return;
+    }
+    var preset = ev.target.closest("[data-preset]");
+    if (preset) {
+      var n = +preset.dataset.preset;
+      trendEnd = todayKey();
+      trendStart = dateKey(new Date(Date.now() - (n - 1) * 86400000));
+      render();
+    }
+  });
+  trendBody.addEventListener("change", function (ev) {
+    if (ev.target.id === "trendStartInput") { trendStart = ev.target.value || trendStart; render(); }
+    else if (ev.target.id === "trendEndInput") { trendEnd = ev.target.value || todayKey(); render(); }
   });
 
   function updateTabbar() {
