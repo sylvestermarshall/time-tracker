@@ -2602,21 +2602,26 @@
     state.entries.forEach(function (e) { if (e.task) counts[e.task] = (counts[e.task] || 0) + 1; });
     return counts;
   }
+  // chips cover every category you've defined (Categories page) or ever
+  // logged, not just ones you've used — most-used first, unused ones
+  // (freshly created) trail alphabetically
   function renderCategoryChips() {
     var counts = categoryCounts();
     var top = manageableCategories()
-      .filter(function (c) { return counts[c]; })
-      .sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); })
-      .slice(0, 8);
+      .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); });
     categoryChips.innerHTML = top.map(function (c) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
     }).join("");
   }
+  // chips cover every task in the catalog (Categories page > task library)
+  // or ever logged, not just ones you've used
   function renderTaskChips() {
     var counts = taskCounts();
-    var top = Object.keys(counts)
-      .sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); })
-      .slice(0, 8);
+    var names = {};
+    Object.keys(state.taskCatalog).forEach(function (t) { names[t] = true; });
+    Object.keys(counts).forEach(function (t) { names[t] = true; });
+    var top = Object.keys(names)
+      .sort(function (a, b) { return (counts[b] || 0) - (counts[a] || 0) || a.localeCompare(b); });
     taskChips.innerHTML = top.map(function (t) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
     }).join("");
