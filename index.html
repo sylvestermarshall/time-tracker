@@ -1360,7 +1360,7 @@
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
-    document.getElementById("summary").hidden = otherPage;
+    document.getElementById("summary").hidden = otherPage || isHome;
     document.getElementById("showMore").hidden = !isHome;
     window.scrollTo(0, 0);
     render();
@@ -1397,7 +1397,9 @@
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
     renderHeads();
-    renderSummary();
+    // the day-total/category-breakdown summary is Day-view only now — Home
+    // skips it (Overview already covers this ground, with goals to boot)
+    if (route !== "home") renderSummary();
     renderTimeline();
   }
 
@@ -2779,7 +2781,8 @@
     if (viewDate !== todayKey()) return;
     if (route === "overview") { renderOverview(); return; }
     if ((route === "home" || route === "day") && document.querySelector(".t-dur .now")) {
-      renderSummary(); renderTimeline();
+      if (route === "day") renderSummary();
+      renderTimeline();
     }
   }, 30000);
 
