@@ -371,7 +371,18 @@
     display: inline-block; margin-top: 0.3rem; font-size: 0.72rem; font-weight: 700;
     border-radius: 999px; padding: 0.14rem 0.55rem; letter-spacing: 0.01em;
   }
-  .entry-focus { margin-top: 0.3rem; font-size: 0.74rem; color: var(--ink-faint); }
+  .entry-focus {
+    margin-top: 0.7rem; padding-top: 0.6rem; border-top: 1px dashed var(--line-soft);
+    text-align: center;
+  }
+  .entry-focus-num {
+    display: block; font-family: "JetBrains Mono", monospace;
+    font-size: 1.6rem; font-weight: 800; color: var(--accent); line-height: 1.1;
+  }
+  .entry-focus-label {
+    display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--ink-faint); margin-top: 0.15rem;
+  }
 
   /* focus toggle: which of 2+ simultaneously-running tasks has attention */
   .focus-toggle {
@@ -2061,7 +2072,10 @@
       // supplementary only — never affects the duration shown above; only
       // shown for entries computeFocusSplit found genuinely overlapping
       var focusHtml = focusSplit.overlapped[e.id]
-        ? '<div class="entry-focus">~' + fmtMins(focusSplit.minutes[e.id] || 0) + " of your attention</div>"
+        ? '<div class="entry-focus">' +
+            '<span class="entry-focus-num">~' + fmtMins(focusSplit.minutes[e.id] || 0) + "</span>" +
+            '<span class="entry-focus-label">of your attention</span>' +
+          "</div>"
         : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
@@ -2069,10 +2083,10 @@
           '<span class="entry-main">' +
             '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
             (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
-            focusHtml +
           "</span>" +
           catTotalHtml +
         "</div>" +
+        focusHtml +
         '<div class="entry-edit" hidden>' +
           '<div class="row">' +
             '<div class="field" style="flex:1"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
