@@ -1152,6 +1152,34 @@
     return rows;
   }
 
+  // groups entries into overlap "episodes" (connected components by direct
+  // time-overlap — if A overlaps B and B overlaps C, all three are one
+  // episode even if A and C never directly overlap), then expresses each
+  // entry's focus minutes as a % share of its own episode's total. Scoping to
+  // the episode (not the whole day) keeps two unrelated juggling sessions on
+  // the same day from bleeding into each other's percentages.
+  function focusClusterPercents(list, minutesMsMap) {
+    var percent = {};
+    if (!list.length) return percent;
+    var parent = {};
+    list.forEach(function (e) { parent[e.id] = e.id; });
+    function find(id) { while (parent[id] !== id) { parent[id] = parent[parent[id]]; id = parent[id]; } return id; }
+    function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        if (list[i].start < list[j].end && list[j].start < list[i].end) union(list[i].id, list[j].id);
+      }
+    }
+    var clusters = {};
+    list.forEach(function (e) { var r = find(e.id); (clusters[r] || (clusters[r] = [])).push(e.id); });
+    Object.keys(clusters).forEach(function (root) {
+      var ids = clusters[root];
+      var sum = ids.reduce(function (s, id) { return s + minutesMsMap[id]; }, 0);
+      ids.forEach(function (id) { percent[id] = sum > 0 ? Math.round((minutesMsMap[id] / sum) * 100) : 0; });
+    });
+    return percent;
+  }
+
   // per-entry "actual focus minutes" for a day, given whichever entries
   // overlapped and the global focusSwitches log — supplementary only, never
   // touches entries' own start/end/duration. An entry that never overlapped
@@ -1175,12 +1203,12 @@
       })
       .filter(function (e) { return e.end > e.start; });
 
-    var minutesMs = {}, overlappedIds = {};
+    var minutesMs = {}, overlappedIds = {}, overlapping = [];
     entries.forEach(function (e) { minutesMs[e.id] = 0; });
     function finish() {
       var minutes = {};
       Object.keys(minutesMs).forEach(function (id) { minutes[id] = Math.round(minutesMs[id] / 60000); });
-      return { minutes: minutes, overlapped: overlappedIds };
+      return { minutes: minutes, overlapped: overlappedIds, percent: focusClusterPercents(overlapping, minutesMs) };
     }
     if (!entries.length) return finish();
 
@@ -1190,7 +1218,7 @@
     var solo = entries.filter(function (e) { return !overlapsAny(e); });
     solo.forEach(function (e) { minutesMs[e.id] = e.end - e.start; });
 
-    var overlapping = entries.filter(function (e) { return overlapsAny(e); });
+    overlapping = entries.filter(function (e) { return overlapsAny(e); });
     overlapping.forEach(function (e) { overlappedIds[e.id] = true; });
     if (!overlapping.length) return finish();
 
@@ -2075,7 +2103,7 @@
       var focusHtml = focusSplit.overlapped[e.id]
         ? '<span class="entry-focus">' +
             '<span class="entry-focus-num">~' + fmtMins(focusSplit.minutes[e.id] || 0) + "</span>" +
-            '<span class="entry-focus-label">of your attention</span>' +
+            '<span class="entry-focus-label">' + (focusSplit.percent[e.id] || 0) + "% of attention</span>" +
           "</span>"
         : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
