@@ -533,7 +533,6 @@
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="logBtn"><i data-lucide="play"></i>Log entry</button>
-        <button type="button" class="btn btn-ghost" id="stopBtn" title="Mark the end of the current task"><i data-lucide="square"></i>Stop</button>
       </div>
     </form>
   </div>
@@ -2273,14 +2272,6 @@
       return s;
     });
   }
-  function addStop(hhmm) {
-    var startAt = makeStartAt(viewDate, hhmm);
-    var now = new Date().toISOString();
-    queueMutation(function (s) {
-      s.entries.push({ id: uid(), startAt: startAt, task: "", category: "", stop: true, createdAt: now, updatedAt: now });
-      return s;
-    });
-  }
   function updateEntry(id, patch) {
     queueMutation(function (s) {
       s.entries = s.entries.map(function (e) {
@@ -2584,10 +2575,6 @@
     hideAc();
     hideTaskAc();
     fTask.focus();
-  });
-
-  document.getElementById("stopBtn").addEventListener("click", function () {
-    addStop(normTime(fTime.value) || nowHHMM());
   });
 
   // category autocomplete
