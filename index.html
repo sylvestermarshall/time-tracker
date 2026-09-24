@@ -125,6 +125,19 @@
   input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   .time-wrap { display: flex; gap: 0.4rem; }
   .time-wrap input { flex: 1; }
+  .input-clear-wrap { position: relative; }
+  .input-clear-wrap input { padding-right: 2.2rem; }
+  .field-clear {
+    display: none; position: absolute; right: 0.35rem; top: 50%; transform: translateY(-50%);
+    width: 1.6rem; height: 1.6rem; padding: 0; border: 0; border-radius: 50%;
+    background: var(--line-soft); color: var(--ink-soft); font-size: 1.1rem; line-height: 1;
+    cursor: pointer; align-items: center; justify-content: center;
+  }
+  .field-clear:active { background: var(--line); color: var(--ink); }
+  /* :placeholder-shown is empty <=> not-shown is non-empty — tracks the
+     input's value with no JS listener needed, regardless of whether the
+     value was typed, set by a chip tap, or set by autocomplete */
+  .input-clear-wrap input:not(:placeholder-shown) ~ .field-clear { display: flex; }
   .check-row {
     display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.6rem 0 0.2rem;
     font-size: 0.85rem; color: var(--ink-soft); line-height: 1.35; cursor: pointer;
@@ -494,15 +507,21 @@
       <div class="field">
         <label class="lbl" for="f-task"><i data-lucide="zap"></i>Tasks</label>
         <div class="chip-row" id="taskChips"></div>
-        <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required
-               enterkeyhint="next" role="combobox" aria-autocomplete="list" aria-expanded="false">
+        <div class="input-clear-wrap">
+          <input type="text" id="f-task" placeholder="e.g. Reviewed pull requests" required
+                 enterkeyhint="next" role="combobox" aria-autocomplete="list" aria-expanded="false">
+          <button type="button" class="field-clear" id="f-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>
+        </div>
         <div class="ac-list" id="taskAc" hidden></div>
       </div>
       <div class="field">
         <label class="lbl" for="f-category"><i data-lucide="layout-grid"></i>Category</label>
         <div class="chip-row" id="categoryChips"></div>
-        <input type="text" id="f-category" placeholder="e.g. Work" enterkeyhint="done"
-               role="combobox" aria-autocomplete="list" aria-expanded="false">
+        <div class="input-clear-wrap">
+          <input type="text" id="f-category" placeholder="e.g. Work" enterkeyhint="done"
+                 role="combobox" aria-autocomplete="list" aria-expanded="false">
+          <button type="button" class="field-clear" id="f-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>
+        </div>
         <div class="ac-list" id="categoryAc" hidden></div>
       </div>
       <label class="check-row">
@@ -2487,6 +2506,21 @@
   var fTime = document.getElementById("f-time");
   var fTask = document.getElementById("f-task");
   var fCat = document.getElementById("f-category");
+
+  // the × inside each field clears it in one tap — no reaching for backspace
+  // and holding it down. Visibility is pure CSS (:placeholder-shown), so it
+  // tracks the value regardless of whether it got there by typing, a chip
+  // tap, or autocomplete — this handler only needs to do the clearing.
+  document.getElementById("f-task-clear").addEventListener("click", function () {
+    fTask.value = "";
+    hideTaskAc();
+    fTask.focus();
+  });
+  document.getElementById("f-category-clear").addEventListener("click", function () {
+    fCat.value = "";
+    hideAc();
+    fCat.focus();
+  });
 
   var agoBtn = document.getElementById("agoBtn");
   var agoN = 0; // 0 = not stepped back yet; cycles 1 → 2 → 3 → 1
