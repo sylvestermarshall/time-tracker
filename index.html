@@ -278,8 +278,20 @@
     display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
     margin-bottom: 0.9rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--line-soft);
   }
-  .abc-card-date { font-weight: 700; }
+  .abc-card-date { font-weight: 700; display: inline-flex; align-items: center; gap: 0.5rem; }
   .abc-textarea { min-height: 4.5rem; resize: vertical; }
+  .abc-status-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex-shrink: 0; background: var(--line); }
+  .abc-status-dot.yes { background: var(--good); }
+  .abc-status-dot.no { background: var(--danger); }
+  .abc-status { display: flex; gap: 0.5rem; }
+  .abc-status-btn {
+    flex: 1; padding: 0.55rem; border-radius: var(--radius-control); border: 1px solid var(--line);
+    background: var(--surface-raised); color: var(--ink-soft); font: inherit; font-weight: 700; font-size: 0.85rem;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+  }
+  .abc-status-btn svg { width: 0.9rem; height: 0.9rem; }
+  .abc-status-yes.active { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+  .abc-status-no.active { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -952,6 +964,8 @@
         a: typeof n.a === "string" ? n.a : "",
         b: typeof n.b === "string" ? n.b : "",
         c: typeof n.c === "string" ? n.c : "",
+        // whether the task got done — "" (not marked yet), "yes", or "no"
+        done: n.done === "yes" || n.done === "no" ? n.done : "",
         createdAt: createdAt,
         updatedAt: n.updatedAt && !isNaN(new Date(n.updatedAt)) ? new Date(n.updatedAt).toISOString() : createdAt
       };
@@ -2055,12 +2069,20 @@
       var dateLabel = new Date(n.createdAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
       return '<div class="panel abc-card" data-id="' + n.id + '">' +
         '<div class="abc-card-head">' +
-          '<span class="abc-card-date">' + escapeHtml(dateLabel) + "</span>" +
+          '<span class="abc-card-date"><span class="abc-status-dot' + (n.done ? " " + n.done : "") + '"></span>' + escapeHtml(dateLabel) + "</span>" +
           '<button type="button" class="btn btn-ghost btn-small" data-act="delete-abc">Remove</button>' +
         "</div>" +
         fieldHtml(n, "a", "A — Task", "What's the task?") +
         fieldHtml(n, "b", "B — Thoughts", "What went through your mind about it?") +
         fieldHtml(n, "c", "C — Result", "What happened — did you do it?") +
+        '<div class="field"><label class="lbl">Did you do it?</label>' +
+          '<div class="abc-status">' +
+            '<button type="button" class="abc-status-btn abc-status-yes' + (n.done === "yes" ? " active" : "") + '" data-val="yes">' +
+              '<i data-lucide="check"></i>Did it</button>' +
+            '<button type="button" class="abc-status-btn abc-status-no' + (n.done === "no" ? " active" : "") + '" data-val="no">' +
+              '<i data-lucide="x"></i>Didn’t</button>' +
+          "</div>" +
+        "</div>" +
       "</div>";
     }
 
@@ -2524,7 +2546,7 @@
   function addAbcNote() {
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      s.abcNotes = s.abcNotes.concat([{ id: uid(), a: "", b: "", c: "", createdAt: now, updatedAt: now }]);
+      s.abcNotes = s.abcNotes.concat([{ id: uid(), a: "", b: "", c: "", done: "", createdAt: now, updatedAt: now }]);
       return s;
     });
   }
@@ -2537,6 +2559,20 @@
         next[field] = value;
         next.updatedAt = now;
         return next;
+      });
+      return s;
+    });
+  }
+  // did-you-do-it status: tapping the already-active choice clears it back
+  // to unmarked. Uses the normal (rendering) queueMutation, not the quiet
+  // one updateAbcNote uses — this is a discrete button tap, not adjacent
+  // text fields, so there's no focus to lose by re-rendering the card.
+  function setAbcDone(id, val) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.abcNotes = s.abcNotes.map(function (n) {
+        if (n.id !== id) return n;
+        return Object.assign({}, n, { done: n.done === val ? "" : val, updatedAt: now });
       });
       return s;
     });
@@ -3181,6 +3217,11 @@
     var delBtn = ev.target.closest('[data-act="delete-abc"]');
     if (delBtn && confirm("Delete this entry? This can't be undone.")) {
       deleteAbcNote(delBtn.closest(".abc-card").dataset.id);
+      return;
+    }
+    var statusBtn = ev.target.closest(".abc-status-btn");
+    if (statusBtn) {
+      setAbcDone(statusBtn.closest(".abc-card").dataset.id, statusBtn.dataset.val);
     }
   });
   // textareas commit on change (blur-after-edit), same as the goal-input
