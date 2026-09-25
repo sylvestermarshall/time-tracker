@@ -271,6 +271,16 @@
   .menu-row-label { flex: 1; font-weight: 700; }
   .menu-row svg:last-of-type { color: var(--ink-faint); }
 
+  /* ---------- ABC thought-record page ---------- */
+  .abc-card { margin-bottom: 1rem; }
+  .abc-card:last-child { margin-bottom: 0; }
+  .abc-card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+    margin-bottom: 0.9rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--line-soft);
+  }
+  .abc-card-date { font-weight: 700; }
+  .abc-textarea { min-height: 4.5rem; resize: vertical; }
+
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
   .compare-chip {
@@ -588,6 +598,11 @@
     <div id="trendBody"></div>
   </div>
 
+  <!-- ABC: a thought record (Activating task / Beliefs / Consequence), one unit per entry -->
+  <div id="abcPage" hidden>
+    <div id="abcList"></div>
+  </div>
+
   <!-- COMPARE: two dates, up to 3 categories, cumulative time-of-day charts -->
   <div id="comparePage" hidden>
     <div id="compareBody"></div>
@@ -837,7 +852,8 @@
       deletedGoals: {}, goalRevivals: {},
       deletedGoalKinds: {}, goalKindRevivals: {},
       deletedTaskGoals: {}, taskGoalRevivals: {},
-      focusSwitches: []
+      focusSwitches: [],
+      abcNotes: [], deletedAbc: {}
     };
   }
 
@@ -895,6 +911,7 @@
     var goalKindRevivals = parseTimestamps(raw.goalKindRevivals, false);
     var deletedTaskGoals = parseTimestamps(raw.deletedTaskGoals, true);
     var taskGoalRevivals = parseTimestamps(raw.taskGoalRevivals, false);
+    var deletedAbc = parseTimestamps(raw.deletedAbc, true);
 
     function categoryAllowed(name) { return tombstoneAllowed(deletedCategories, categoryRevivals, name); }
     function taskCatalogAllowed(task) { return tombstoneAllowed(deletedTaskCatalog, taskCatalogRevivals, task); }
@@ -924,6 +941,22 @@
       // a tombstone wins unless this copy of the entry was edited after the delete
       .filter(function (e) { return !deletedIds[e.id] || new Date(e.updatedAt) > new Date(deletedIds[e.id]); });
     entries.sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
+
+    // ABC thought-record entries — same shape/merge rules as `entries` above
+    // (id + createdAt/updatedAt, a tombstone that a later edit can outrun),
+    // just without the day-bucketing/chaining logic entries need
+    var abcNotes = (Array.isArray(raw.abcNotes) ? raw.abcNotes : []).map(function (n) {
+      var createdAt = n.createdAt && !isNaN(new Date(n.createdAt)) ? new Date(n.createdAt).toISOString() : new Date().toISOString();
+      return {
+        id: n.id || uid(),
+        a: typeof n.a === "string" ? n.a : "",
+        b: typeof n.b === "string" ? n.b : "",
+        c: typeof n.c === "string" ? n.c : "",
+        createdAt: createdAt,
+        updatedAt: n.updatedAt && !isNaN(new Date(n.updatedAt)) ? new Date(n.updatedAt).toISOString() : createdAt
+      };
+    }).filter(function (n) { return !deletedAbc[n.id] || new Date(n.updatedAt) > new Date(deletedAbc[n.id]); });
+    abcNotes.sort(function (a, b) { return new Date(a.createdAt) - new Date(b.createdAt); });
 
     var catSet = {};
     var rawCats = Array.isArray(raw.categories) ? raw.categories : (Array.isArray(raw.types) ? raw.types : []);
@@ -1000,7 +1033,8 @@
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
-      focusSwitches: focusSwitches
+      focusSwitches: focusSwitches,
+      abcNotes: abcNotes, deletedAbc: deletedAbc
     };
   }
 
@@ -1028,6 +1062,7 @@
     var goalKindRevivals = mergeTimestamps(a.goalKindRevivals, b.goalKindRevivals);
     var deletedTaskGoals = mergeTimestamps(a.deletedTaskGoals, b.deletedTaskGoals);
     var taskGoalRevivals = mergeTimestamps(a.taskGoalRevivals, b.taskGoalRevivals);
+    var deletedAbc = mergeTimestamps(a.deletedAbc, b.deletedAbc);
 
     var byId = {};
     (a.entries || []).concat(b.entries || []).forEach(function (e) {
@@ -1035,6 +1070,14 @@
       if (!cur || new Date(e.updatedAt || e.createdAt) > new Date(cur.updatedAt || cur.createdAt)) byId[e.id] = e;
     });
     var entries = Object.keys(byId).map(function (k) { return byId[k]; });
+
+    // same id-union + newest-wins rule as entries above
+    var abcById = {};
+    (a.abcNotes || []).concat(b.abcNotes || []).forEach(function (n) {
+      var cur = abcById[n.id];
+      if (!cur || new Date(n.updatedAt || n.createdAt) > new Date(cur.updatedAt || cur.createdAt)) abcById[n.id] = n;
+    });
+    var abcNotes = Object.keys(abcById).map(function (k) { return abcById[k]; });
 
     // append-only: unlike entries, a given id's content never changes, so this
     // is a plain union with no updatedAt tie-break to worry about
@@ -1063,7 +1106,8 @@
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
-      focusSwitches: focusSwitches
+      focusSwitches: focusSwitches,
+      abcNotes: abcNotes, deletedAbc: deletedAbc
     });
   }
 
@@ -1132,6 +1176,24 @@
     state = normalizeState(state);
     cacheLocal();
     render();
+    if (!getToken()) return;
+    pendingSync = true;
+    setSyncStatus("syncing");
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(flushToRemote, 800);
+  }
+  // same as queueMutation but skips render() — for a text-field commit on a
+  // page with more than one field per record (the ABC page's A/B/C
+  // textareas). render() rebuilds the whole list via innerHTML, and since
+  // blur-then-change fires synchronously *before* the browser finishes
+  // moving focus to whatever was tapped next, a normal render() there would
+  // destroy that next field's DOM node mid-gesture and silently swallow the
+  // tap. Nothing else on screen needs to change for a plain text edit, so
+  // skipping render() is free.
+  function queueMutationQuiet(mutateFn) {
+    state = mutateFn(state);
+    state = normalizeState(state);
+    cacheLocal();
     if (!getToken()) return;
     pendingSync = true;
     setSyncStatus("syncing");
@@ -1419,6 +1481,8 @@
       route = "chips";
     } else if (h === "trend") {
       route = "trend";
+    } else if (h === "abc") {
+      route = "abc";
     } else if (h === "compare") {
       route = "compare";
     } else if (h === "comparedetail" && compareDetailCat) {
@@ -1438,8 +1502,9 @@
     var isCompareDetail = route === "compareDetail";
     var isChips = route === "chips";
     var isTrend = route === "trend";
+    var isAbc = route === "abc";
     var dated = route === "day" || isOverview;
-    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend;
+    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend || isAbc;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
@@ -1450,6 +1515,7 @@
     document.getElementById("menuPage").hidden = !isMenu;
     document.getElementById("chipsPage").hidden = !isChips;
     document.getElementById("trendPage").hidden = !isTrend;
+    document.getElementById("abcPage").hidden = !isAbc;
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
@@ -1466,6 +1532,7 @@
   function goToMenu() { location.hash = "#menu"; }
   function goToChips() { location.hash = "#chips"; }
   function goToTrend() { location.hash = "#trend"; }
+  function goToAbc() { location.hash = "#abc"; }
   function goToCompare() { location.hash = "#compare"; }
   function goToCompareDetail(cat) { compareDetailCat = cat; location.hash = "#comparedetail"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
@@ -1491,6 +1558,7 @@
     if (route === "menu") { renderMenu(); return; }
     if (route === "chips") { renderChipsPage(); return; }
     if (route === "trend") { renderTrend(); return; }
+    if (route === "abc") { renderAbcPage(); return; }
     if (route === "compare") { renderCompare(); return; }
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
@@ -1705,7 +1773,8 @@
     { act: "menu-goals", icon: "target", label: "Goals", go: goToGoals },
     { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
     { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
-    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend }
+    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend },
+    { act: "menu-abc", icon: "brain", label: "ABC", go: goToAbc }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -1967,6 +2036,38 @@
         "</div>";
       }).join("");
 
+    box.innerHTML = html;
+  }
+
+  // ---------- ABC thought-record page ----------
+  function renderAbcPage() {
+    document.getElementById("pageTitle").textContent = "ABC";
+    var box = document.getElementById("abcList");
+    var notes = state.abcNotes.slice().sort(function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+
+    function fieldHtml(n, field, label, placeholder) {
+      return '<div class="field"><label class="lbl">' + label + "</label>" +
+        '<textarea class="abc-textarea" data-field="' + field + '" placeholder="' + escapeHtml(placeholder) + '">' +
+          escapeHtml(n[field]) +
+        "</textarea></div>";
+    }
+    function cardHtml(n) {
+      var dateLabel = new Date(n.createdAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+      return '<div class="panel abc-card" data-id="' + n.id + '">' +
+        '<div class="abc-card-head">' +
+          '<span class="abc-card-date">' + escapeHtml(dateLabel) + "</span>" +
+          '<button type="button" class="btn btn-ghost btn-small" data-act="delete-abc">Remove</button>' +
+        "</div>" +
+        fieldHtml(n, "a", "A — Task", "What's the task?") +
+        fieldHtml(n, "b", "B — Thoughts", "What went through your mind about it?") +
+        fieldHtml(n, "c", "C — Result", "What happened — did you do it?") +
+      "</div>";
+    }
+
+    var html = '<p class="goals-intro">A thought record for tough tasks: <b>A</b> is the task, <b>B</b> is your thoughts/reaction to it, <b>C</b> is the result. Start a new one, then fill it in as you go.</p>' +
+      '<button type="button" class="btn btn-ghost" id="addAbcBtn" style="width:100%;margin-bottom:1.2rem;">' +
+        '<i data-lucide="plus"></i>New entry</button>';
+    html += notes.length ? notes.map(cardHtml).join("") : '<p class="goals-empty">No entries yet.</p>';
     box.innerHTML = html;
   }
 
@@ -2419,6 +2520,37 @@
       return s;
     });
   }
+  // ---------- ABC thought records ----------
+  function addAbcNote() {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.abcNotes = s.abcNotes.concat([{ id: uid(), a: "", b: "", c: "", createdAt: now, updatedAt: now }]);
+      return s;
+    });
+  }
+  function updateAbcNote(id, field, value) {
+    var now = new Date().toISOString();
+    queueMutationQuiet(function (s) {
+      s.abcNotes = s.abcNotes.map(function (n) {
+        if (n.id !== id) return n;
+        var next = Object.assign({}, n);
+        next[field] = value;
+        next.updatedAt = now;
+        return next;
+      });
+      return s;
+    });
+  }
+  function deleteAbcNote(id) {
+    var iso = new Date().toISOString();
+    queueMutation(function (s) {
+      s.abcNotes = s.abcNotes.filter(function (n) { return n.id !== id; });
+      s.deletedAbc = Object.assign({}, s.deletedAbc);
+      s.deletedAbc[id] = iso;
+      return s;
+    });
+  }
+
   function endEntryNow(id) {
     var iso = new Date().toISOString();
     queueMutation(function (s) {
@@ -3033,6 +3165,31 @@
   trendBody.addEventListener("change", function (ev) {
     if (ev.target.id === "trendStartInput") { trendStart = ev.target.value || trendStart; render(); }
     else if (ev.target.id === "trendEndInput") { trendEnd = ev.target.value || todayKey(); render(); }
+  });
+
+  // ---------- ABC thought-record page ----------
+  var abcList = document.getElementById("abcList");
+  abcList.addEventListener("click", function (ev) {
+    if (ev.target.closest("#addAbcBtn")) {
+      addAbcNote();
+      // the new (empty) entry sorts to the top — focus its first field so
+      // there's nothing left to tap before typing
+      var firstTa = abcList.querySelector(".abc-card .abc-textarea");
+      if (firstTa) firstTa.focus();
+      return;
+    }
+    var delBtn = ev.target.closest('[data-act="delete-abc"]');
+    if (delBtn && confirm("Delete this entry? This can't be undone.")) {
+      deleteAbcNote(delBtn.closest(".abc-card").dataset.id);
+    }
+  });
+  // textareas commit on change (blur-after-edit), same as the goal-input
+  // fields elsewhere — re-rendering on every keystroke would rebuild the
+  // list mid-typing and drop focus
+  abcList.addEventListener("change", function (ev) {
+    var ta = ev.target.closest(".abc-textarea");
+    if (!ta) return;
+    updateAbcNote(ta.closest(".abc-card").dataset.id, ta.dataset.field, ta.value);
   });
 
   function updateTabbar() {
