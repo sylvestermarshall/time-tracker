@@ -1653,6 +1653,29 @@
   function isDeletedLabel(c) { return / \(deleted\)$/.test(c); }
   function manageableCategories() { return state.categories.filter(function (c) { return !isDeletedLabel(c); }); }
 
+  // "Work" and "work" are the same category/task to a person even though
+  // they're different object keys/array entries to JS — these two helpers
+  // are the single place that decides it, so a name typed (or renamed) in a
+  // different case reuses the existing entry instead of creating a look-alike
+  // duplicate. Used at every point a category or task name gets created or
+  // renamed: addEntry, addCategoryOnly, addTaskCatalog, renameCategory,
+  // renameTaskCatalog.
+  function findCaseInsensitive(list, name) {
+    var lower = name.toLowerCase();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].toLowerCase() === lower) return list[i];
+    }
+    return "";
+  }
+  // every task name known to a draft state `s` — the catalog's keys plus
+  // anything ever logged, same universe the quick-pick chips draw from
+  function knownTaskNames(s) {
+    var names = {};
+    Object.keys(s.taskCatalog).forEach(function (t) { names[t] = true; });
+    s.entries.forEach(function (e) { if (e.task) names[e.task] = true; });
+    return Object.keys(names);
+  }
+
   // duration per entry id across all days (same chain rules as rowsForDay)
   function entryDurations() {
     var out = {};
@@ -2551,17 +2574,22 @@
     var startAt = makeStartAt(viewDate, hhmm);
     var endAt = opts.concurrent ? makeEndAt(startAt, opts.endHHMM || "") : "";
     category = category.trim();
+    task = task.trim();
     var now = new Date().toISOString();
     queueMutation(function (s) {
+      // reuse an existing category/task that only differs in case, rather
+      // than creating a look-alike duplicate
+      var cat = category ? (findCaseInsensitive(s.categories, category) || category) : "";
+      var tsk = task ? (findCaseInsensitive(knownTaskNames(s), task) || task) : "";
       s.entries.push({
         id: uid(), startAt: startAt, endAt: endAt,
         concurrent: !!opts.concurrent,
-        task: task.trim(), category: category, stop: false,
+        task: tsk, category: cat, stop: false,
         createdAt: now, updatedAt: now
       });
-      if (category && s.categories.indexOf(category) < 0) s.categories.push(category);
-      reviveChipHidden(s, "categories", category);
-      reviveChipHidden(s, "tasks", task.trim());
+      if (cat && s.categories.indexOf(cat) < 0) s.categories.push(cat);
+      reviveChipHidden(s, "categories", cat);
+      reviveChipHidden(s, "tasks", tsk);
       return s;
     });
   }
@@ -2725,9 +2753,10 @@
     name = name.trim();
     if (!name) return;
     queueMutation(function (s) {
-      if (s.categories.indexOf(name) < 0) s.categories = s.categories.concat([name]);
-      reviveCategory(s, name);
-      reviveChipHidden(s, "categories", name);
+      var cat = findCaseInsensitive(s.categories, name) || name;
+      if (s.categories.indexOf(cat) < 0) s.categories = s.categories.concat([cat]);
+      reviveCategory(s, cat);
+      reviveChipHidden(s, "categories", cat);
       return s;
     });
   }
@@ -2735,15 +2764,17 @@
     task = task.trim(); category = category.trim();
     if (!task || !category) return;
     queueMutation(function (s) {
+      var cat = findCaseInsensitive(s.categories, category) || category;
+      var tsk = findCaseInsensitive(knownTaskNames(s), task) || task;
       s.taskCatalog = Object.assign({}, s.taskCatalog);
-      s.taskCatalog[task] = category;
+      s.taskCatalog[tsk] = cat;
       s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
-      s.taskCatalogUpdatedAt[task] = new Date().toISOString();
-      if (s.categories.indexOf(category) < 0) s.categories = s.categories.concat([category]);
-      reviveCategory(s, category);
-      reviveTaskCatalog(s, task);
-      reviveChipHidden(s, "tasks", task);
-      reviveChipHidden(s, "categories", category);
+      s.taskCatalogUpdatedAt[tsk] = new Date().toISOString();
+      if (s.categories.indexOf(cat) < 0) s.categories = s.categories.concat([cat]);
+      reviveCategory(s, cat);
+      reviveTaskCatalog(s, tsk);
+      reviveChipHidden(s, "tasks", tsk);
+      reviveChipHidden(s, "categories", cat);
       return s;
     });
   }
@@ -2765,16 +2796,21 @@
     if (!newTask || newTask === oldTask) return;
     var iso = new Date().toISOString();
     queueMutation(function (s) {
+      // if the new name only differs in case from some other existing task,
+      // reuse that task's casing (i.e. merge into it) instead of creating a
+      // look-alike duplicate; a pure case-fix of oldTask itself still works
+      // normally since oldTask is excluded from this search
+      var target = findCaseInsensitive(knownTaskNames(s).filter(function (t) { return t !== oldTask; }), newTask) || newTask;
       s.taskCatalog = Object.assign({}, s.taskCatalog);
       var cat = s.taskCatalog[oldTask];
       delete s.taskCatalog[oldTask];
-      s.taskCatalog[newTask] = cat;
+      s.taskCatalog[target] = cat;
       s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
       delete s.taskCatalogUpdatedAt[oldTask];
-      s.taskCatalogUpdatedAt[newTask] = iso;
+      s.taskCatalogUpdatedAt[target] = iso;
       s.deletedTaskCatalog = Object.assign({}, s.deletedTaskCatalog);
       s.deletedTaskCatalog[oldTask] = iso;
-      reviveTaskCatalog(s, newTask);
+      reviveTaskCatalog(s, target);
       return s;
     });
   }
@@ -2785,32 +2821,37 @@
     if (!newName || newName === oldName) return;
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      s.categories = s.categories.map(function (c) { return c === oldName ? newName : c; });
+      // same case-insensitive reuse as addCategoryOnly/renameTaskCatalog —
+      // renaming to a name that only differs in case from another existing
+      // category merges into that category's casing instead of creating a
+      // look-alike duplicate
+      var target = findCaseInsensitive(s.categories.filter(function (c) { return c !== oldName; }), newName) || newName;
+      s.categories = s.categories.map(function (c) { return c === oldName ? target : c; });
       s.entries = s.entries.map(function (e) {
-        return e.category === oldName ? Object.assign({}, e, { category: newName, updatedAt: now }) : e;
+        return e.category === oldName ? Object.assign({}, e, { category: target, updatedAt: now }) : e;
       });
       s.goals = Object.assign({}, s.goals);
-      if (oldName in s.goals) { s.goals[newName] = s.goals[oldName]; delete s.goals[oldName]; }
+      if (oldName in s.goals) { s.goals[target] = s.goals[oldName]; delete s.goals[oldName]; }
       s.goalKinds = Object.assign({}, s.goalKinds);
-      if (oldName in s.goalKinds) { s.goalKinds[newName] = s.goalKinds[oldName]; delete s.goalKinds[oldName]; }
+      if (oldName in s.goalKinds) { s.goalKinds[target] = s.goalKinds[oldName]; delete s.goalKinds[oldName]; }
       var newTaskGoals = {};
       Object.keys(s.taskGoals).forEach(function (k) {
         var p = k.split("\n"), kc = p[0], kt = p.slice(1).join("\n");
-        newTaskGoals[(kc === oldName ? newName : kc) + "\n" + kt] = s.taskGoals[k];
+        newTaskGoals[(kc === oldName ? target : kc) + "\n" + kt] = s.taskGoals[k];
       });
       s.taskGoals = newTaskGoals;
       var newCatalog = {};
       s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
       Object.keys(s.taskCatalog).forEach(function (t) {
         if (s.taskCatalog[t] === oldName) {
-          newCatalog[t] = newName;
+          newCatalog[t] = target;
           s.taskCatalogUpdatedAt[t] = now;
         } else {
           newCatalog[t] = s.taskCatalog[t];
         }
       });
       s.taskCatalog = newCatalog;
-      reviveCategory(s, newName);
+      reviveCategory(s, target);
       // tombstone the old name — categories is otherwise a plain array
       // union in mergeState, so the next sync's pull-and-merge with a gist
       // that hasn't seen this rename yet would bring the old name right
