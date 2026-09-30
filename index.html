@@ -154,6 +154,8 @@
   .btn-primary:hover { filter: brightness(1.05); }
   .btn-ghost { background: transparent; color: var(--ink-soft); border-color: var(--line); }
   .btn-ghost:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .btn-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+  .btn-danger:hover { filter: brightness(1.05); }
   .btn-small { padding: 0.42rem 0.85rem; font-size: 0.82rem; font-weight: 600; }
   .btn-small svg { width: 0.85rem; height: 0.85rem; }
   .form-actions { display: flex; gap: 0.6rem; margin-top: 0.9rem; }
@@ -665,6 +667,24 @@
       <button class="btn btn-ghost btn-small" id="copyBackup">Copy</button>
       <button class="btn btn-ghost btn-small" id="downloadBackup">Download .json</button>
       <button class="btn btn-primary btn-small" id="restoreBackup">Restore from text</button>
+    </div>
+  </div>
+</div>
+
+<!-- delete-category modal: optionally move its tasks to another category first -->
+<div class="modal-backdrop" id="deleteCatModal">
+  <div class="modal">
+    <h2><i data-lucide="trash-2"></i>Delete category</h2>
+    <p class="note" id="deleteCatNote"></p>
+    <div class="field">
+      <label class="lbl" for="deleteCatMoveTo">Move its tasks to</label>
+      <select id="deleteCatMoveTo">
+        <option value="">Don't move — delete them too</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-small" id="closeDeleteCat">Cancel</button>
+      <button class="btn btn-danger btn-small" id="confirmDeleteCat">Delete</button>
     </div>
   </div>
 </div>
@@ -3334,11 +3354,7 @@
     }
     var deleteCatBtn = ev.target.closest('[data-act="delete-cat"]');
     if (deleteCatBtn) {
-      var delName = deleteCatBtn.closest(".goal-section").dataset.cat;
-      if (confirm('Delete the "' + delName + '" category? Its catalog tasks and goal settings will be cleared. ' +
-        'Entries already logged under it are kept, relabeled "' + delName + ' (deleted)" so your history stays intact.')) {
-        deleteCategory(delName);
-      }
+      openDeleteCatModal(deleteCatBtn.closest(".goal-section").dataset.cat);
       return;
     }
   });
@@ -3484,6 +3500,35 @@
     backupStatus.textContent = "Restored.";
     backupStatus.style.color = "var(--accent)";
     setTimeout(function () { backupModal.classList.remove("open"); }, 700);
+  });
+
+  // ---------- delete-category modal ----------
+  var deleteCatModal = document.getElementById("deleteCatModal");
+  var deleteCatMoveTo = document.getElementById("deleteCatMoveTo");
+  var deleteCatNote = document.getElementById("deleteCatNote");
+  var deleteCatName = "";
+  function openDeleteCatModal(name) {
+    deleteCatName = name;
+    var others = manageableCategories().filter(function (c) { return c !== name; }).sort(function (a, b) { return a.localeCompare(b); });
+    deleteCatMoveTo.innerHTML = '<option value="">Don’t move — delete them too</option>' +
+      others.map(function (c) { return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + "</option>"; }).join("");
+    deleteCatNote.textContent = 'Delete "' + name + '"?' +
+      (others.length ? " You can optionally move its tasks to another category below first — otherwise, its" : " Its") +
+      ' catalog tasks and goal settings will be cleared. Entries already logged under it are kept, relabeled "' +
+      name + ' (deleted)" so your history stays intact.';
+    deleteCatModal.classList.add("open");
+  }
+  function closeDeleteCatModal() { deleteCatModal.classList.remove("open"); }
+  document.getElementById("closeDeleteCat").addEventListener("click", closeDeleteCatModal);
+  deleteCatModal.addEventListener("click", function (ev) { if (ev.target === deleteCatModal) closeDeleteCatModal(); });
+  document.getElementById("confirmDeleteCat").addEventListener("click", function () {
+    var target = deleteCatMoveTo.value;
+    // moving = renaming the deleted category to the target's name, which
+    // merges its entries/task catalog/goals/task budgets into it — the
+    // same machinery a normal rename uses, just aimed at an existing name
+    if (target) renameCategory(deleteCatName, target);
+    else deleteCategory(deleteCatName);
+    closeDeleteCatModal();
   });
 
   // ---------- init ----------
