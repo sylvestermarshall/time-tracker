@@ -872,6 +872,12 @@
   function emptyState() {
     return {
       entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {},
+      // when each taskCatalog[k] value was last set — taskCatalog itself is
+      // otherwise merged by plain Object.assign (last object wins per key),
+      // which has no concept of "newer" and will happily let a stale
+      // pre-rename gist snapshot overwrite a task's just-moved category
+      // right back to the old one on the next sync
+      taskCatalogUpdatedAt: {},
       // manual order / hide-from-chips for the log form's quick-pick chips —
       // a display preference, not catalog data, so it's kept separate from
       // taskCatalog/categories and needs no tombstone: hiding is a plain list,
@@ -1035,6 +1041,7 @@
         if (k && typeof v === "string" && v && taskCatalogAllowed(k)) { taskCatalog[k] = v; if (categoryAllowed(v)) catSet[v] = true; }
       });
     }
+    var taskCatalogUpdatedAt = parseTimestamps(raw.taskCatalogUpdatedAt, false);
 
     // which entry had "focus" when 2+ were running at once — append-only log,
     // never pruned by entry existence here (that's a read-time concern, see
@@ -1060,6 +1067,7 @@
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
       goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
+      taskCatalogUpdatedAt: taskCatalogUpdatedAt,
       chipOrder: chipOrder, chipHidden: chipHidden,
       deletedIds: deletedIds,
       deletedCategories: deletedCategories, categoryRevivals: categoryRevivals,
@@ -1120,13 +1128,35 @@
     var focusSwitches = Object.keys(switchesById).map(function (k) { return switchesById[k]; });
 
     function mergeOrder(x, y) { return uniq((x || []).concat(y || [])); }
+    // a plain Object.assign would let whichever side merges in *last* win a
+    // key present on both sides, tombstone or not — fine for a value that
+    // never changes in place, but taskCatalog[k]'s value (which category a
+    // task is under) does change in place (a rename/merge reassigns it), so
+    // a key present on both sides with a *different* value needs a real
+    // "which one is newer" check, using each side's own per-key timestamp
+    function mergeTaskCatalog(ac, bc, aTimes, bTimes) {
+      ac = ac || {}; bc = bc || {}; aTimes = aTimes || {}; bTimes = bTimes || {};
+      var out = {};
+      uniq(Object.keys(ac).concat(Object.keys(bc))).forEach(function (k) {
+        if (!(k in ac)) { out[k] = bc[k]; return; }
+        if (!(k in bc) || ac[k] === bc[k]) { out[k] = ac[k]; return; }
+        var ta = aTimes[k], tb = bTimes[k];
+        // neither side has ever been timestamped (data from before this
+        // tracking existed) — an actual three-way ambiguity with no correct
+        // answer, so just pick one deterministically
+        out[k] = (ta && tb) ? (new Date(ta) >= new Date(tb) ? ac[k] : bc[k]) : (tb && !ta) ? bc[k] : ac[k];
+      });
+      return out;
+    }
+    var taskCatalogUpdatedAt = mergeTimestamps(a.taskCatalogUpdatedAt, b.taskCatalogUpdatedAt);
     return normalizeState({
       entries: entries,
       categories: uniq((a.categories || []).concat(b.categories || [])),
       goals: Object.assign({}, a.goals, b.goals),
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
-      taskCatalog: Object.assign({}, a.taskCatalog, b.taskCatalog),
+      taskCatalog: mergeTaskCatalog(a.taskCatalog, b.taskCatalog, a.taskCatalogUpdatedAt, b.taskCatalogUpdatedAt),
+      taskCatalogUpdatedAt: taskCatalogUpdatedAt,
       chipOrder: {
         categories: mergeOrder((a.chipOrder || {}).categories, (b.chipOrder || {}).categories),
         tasks: mergeOrder((a.chipOrder || {}).tasks, (b.chipOrder || {}).tasks)
@@ -2707,6 +2737,8 @@
     queueMutation(function (s) {
       s.taskCatalog = Object.assign({}, s.taskCatalog);
       s.taskCatalog[task] = category;
+      s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
+      s.taskCatalogUpdatedAt[task] = new Date().toISOString();
       if (s.categories.indexOf(category) < 0) s.categories = s.categories.concat([category]);
       reviveCategory(s, category);
       reviveTaskCatalog(s, task);
@@ -2737,6 +2769,9 @@
       var cat = s.taskCatalog[oldTask];
       delete s.taskCatalog[oldTask];
       s.taskCatalog[newTask] = cat;
+      s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
+      delete s.taskCatalogUpdatedAt[oldTask];
+      s.taskCatalogUpdatedAt[newTask] = iso;
       s.deletedTaskCatalog = Object.assign({}, s.deletedTaskCatalog);
       s.deletedTaskCatalog[oldTask] = iso;
       reviveTaskCatalog(s, newTask);
@@ -2765,8 +2800,14 @@
       });
       s.taskGoals = newTaskGoals;
       var newCatalog = {};
+      s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
       Object.keys(s.taskCatalog).forEach(function (t) {
-        newCatalog[t] = s.taskCatalog[t] === oldName ? newName : s.taskCatalog[t];
+        if (s.taskCatalog[t] === oldName) {
+          newCatalog[t] = newName;
+          s.taskCatalogUpdatedAt[t] = now;
+        } else {
+          newCatalog[t] = s.taskCatalog[t];
+        }
       });
       s.taskCatalog = newCatalog;
       reviveCategory(s, newName);
@@ -2796,8 +2837,13 @@
         return e.category === name ? Object.assign({}, e, { category: deletedLabel, updatedAt: iso }) : e;
       });
       var newCatalog = {};
+      // same reasoning as removeTaskCatalog's tombstone: taskCatalog keys
+      // are otherwise a plain union in mergeState, so a wiped task would
+      // come right back from a gist that hasn't seen this delete yet
+      s.deletedTaskCatalog = Object.assign({}, s.deletedTaskCatalog);
       Object.keys(s.taskCatalog).forEach(function (t) {
         if (s.taskCatalog[t] !== name) newCatalog[t] = s.taskCatalog[t];
+        else s.deletedTaskCatalog[t] = iso;
       });
       s.taskCatalog = newCatalog;
       s.goals = Object.assign({}, s.goals); delete s.goals[name];
