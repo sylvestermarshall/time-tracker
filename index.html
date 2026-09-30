@@ -2770,6 +2770,15 @@
       });
       s.taskCatalog = newCatalog;
       reviveCategory(s, newName);
+      // tombstone the old name — categories is otherwise a plain array
+      // union in mergeState, so the next sync's pull-and-merge with a gist
+      // that hasn't seen this rename yet would bring the old name right
+      // back the moment it runs. (Recreating that same name later still
+      // works: addCategoryOnly/addTaskCatalog explicitly revive it, and a
+      // fresh entry logged under it revives it by simply out-dating this
+      // tombstone, same as deleteCategory's tombstone already does.)
+      s.deletedCategories = Object.assign({}, s.deletedCategories);
+      s.deletedCategories[oldName] = now;
       return s;
     });
   }
