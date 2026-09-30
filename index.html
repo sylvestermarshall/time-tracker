@@ -281,6 +281,9 @@
     margin-bottom: 0.9rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--line-soft);
   }
   .abc-card-date { font-weight: 700; display: inline-flex; align-items: center; gap: 0.5rem; }
+  .abc-card-date input[type="date"] {
+    width: auto; padding: 0.3rem 0.4rem; font: inherit; font-weight: 700; font-size: 0.85rem;
+  }
   .abc-textarea { min-height: 4.5rem; resize: vertical; }
   .abc-status-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex-shrink: 0; background: var(--line); }
   .abc-status-dot.yes { background: var(--good); }
@@ -992,6 +995,9 @@
         c: typeof n.c === "string" ? n.c : "",
         // whether the task got done — "" (not marked yet), "yes", or "no"
         done: n.done === "yes" || n.done === "no" ? n.done : "",
+        // the day this entry is filed under — editable, since it's often
+        // logged after the fact for an earlier day; defaults to createdAt
+        date: typeof n.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(n.date) ? n.date : dateKey(new Date(createdAt)),
         createdAt: createdAt,
         updatedAt: n.updatedAt && !isNaN(new Date(n.updatedAt)) ? new Date(n.updatedAt).toISOString() : createdAt
       };
@@ -2130,7 +2136,11 @@
   function renderAbcPage() {
     document.getElementById("pageTitle").textContent = "ABC";
     var box = document.getElementById("abcList");
-    var notes = state.abcNotes.slice().sort(function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+    // sorted by the entry's (editable) date rather than when it was typed in,
+    // so backfilling an earlier day's entry files it in the right place
+    var notes = state.abcNotes.slice().sort(function (a, b) {
+      return b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt);
+    });
 
     function fieldHtml(n, field, label, placeholder) {
       return '<div class="field"><label class="lbl">' + label + "</label>" +
@@ -2139,10 +2149,10 @@
         "</textarea></div>";
     }
     function cardHtml(n) {
-      var dateLabel = new Date(n.createdAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
       return '<div class="panel abc-card" data-id="' + n.id + '">' +
         '<div class="abc-card-head">' +
-          '<span class="abc-card-date"><span class="abc-status-dot' + (n.done ? " " + n.done : "") + '"></span>' + escapeHtml(dateLabel) + "</span>" +
+          '<span class="abc-card-date"><span class="abc-status-dot' + (n.done ? " " + n.done : "") + '"></span>' +
+            '<input type="date" class="abc-date-input" data-field="date" value="' + escapeHtml(n.date) + '"></span>' +
           '<button type="button" class="btn btn-ghost btn-small" data-act="delete-abc">Remove</button>' +
         "</div>" +
         fieldHtml(n, "a", "A — Task", "What's the task?") +
@@ -2555,8 +2565,8 @@
               (along && !e.endAt ? ' data-prefill-now="1"' : "") +
               ' value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
           "</div>" +
-          '<div class="field"><label class="lbl">Task</label><input type="text" data-f="task" value="' + escapeHtml(e.task) + '"></div>' +
-          '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" value="' + escapeHtml(e.category) + '"></div>' +
+          '<div class="field"><label class="lbl">Task</label><input type="text" data-f="task" autocomplete="off" value="' + escapeHtml(e.task) + '"><div class="ac-list" data-ac="task" hidden></div></div>' +
+          '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" autocomplete="off" value="' + escapeHtml(e.category) + '"><div class="ac-list" data-ac="category" hidden></div></div>' +
           '<label class="check-row"><input type="checkbox" data-f="concurrent"' + (e.concurrent ? " checked" : "") + '> Runs alongside other tasks (concurrent)</label>' +
           '<div class="form-actions">' +
             '<button type="button" class="btn btn-primary btn-small" data-act="save">Save</button>' +
@@ -2624,7 +2634,7 @@
   function addAbcNote() {
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      s.abcNotes = s.abcNotes.concat([{ id: uid(), a: "", b: "", c: "", done: "", createdAt: now, updatedAt: now }]);
+      s.abcNotes = s.abcNotes.concat([{ id: uid(), a: "", b: "", c: "", done: "", date: todayKey(), createdAt: now, updatedAt: now }]);
       return s;
     });
   }
@@ -2651,6 +2661,20 @@
       s.abcNotes = s.abcNotes.map(function (n) {
         if (n.id !== id) return n;
         return Object.assign({}, n, { done: n.done === val ? "" : val, updatedAt: now });
+      });
+      return s;
+    });
+  }
+  // like setAbcDone, this re-renders (rather than the quiet update the A/B/C
+  // textareas use) since picking a date is a discrete action, not typing —
+  // and re-rendering moves the card to its new place in the date-sorted list
+  function setAbcDate(id, dateStr) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.abcNotes = s.abcNotes.map(function (n) {
+        if (n.id !== id) return n;
+        return Object.assign({}, n, { date: dateStr, updatedAt: now });
       });
       return s;
     });
@@ -2981,16 +3005,16 @@
     fTask.focus();
   });
 
-  // category autocomplete
-  var acList = document.getElementById("categoryAc");
-  var acActive = -1;
+  // ---------- category & task suggestions ----------
+  // shared matching + dropdown wiring, used both by the add form's fields
+  // and by each entry's inline edit fields (see attachEditAc)
   function categoryCounts() {
     var counts = {};
     state.entries.forEach(function (e) { if (e.category) counts[e.category] = (counts[e.category] || 0) + 1; });
     return counts;
   }
-  function acMatches() {
-    var q = fCat.value.trim().toLowerCase();
+  function categoryMatches(query) {
+    var q = (query || "").trim().toLowerCase();
     var counts = categoryCounts();
     return manageableCategories()
       .filter(function (c) { return !q || c.toLowerCase().indexOf(q) >= 0; })
@@ -2998,54 +3022,8 @@
       .slice(0, 8)
       .map(function (c) { return { name: c, count: counts[c] || 0 }; });
   }
-  function showAc() {
-    var m = acMatches();
-    if (!m.length) { hideAc(); return; }
-    acActive = -1;
-    acList.innerHTML = m.map(function (x, i) {
-      return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(x.name) + '">' +
-        escapeHtml(x.name) + (x.count ? '<span class="cnt">' + x.count + "×</span>" : "") + "</div>";
-    }).join("");
-    acList.hidden = false;
-    fCat.setAttribute("aria-expanded", "true");
-  }
-  function hideAc() { acList.hidden = true; acActive = -1; fCat.setAttribute("aria-expanded", "false"); }
-  // clicking into the category field clears whatever's there (it stays filled after
-  // a log as a sticky default) so a fresh pick / type is quick
-  fCat.addEventListener("focus", function () { fCat.value = ""; });
-  fCat.addEventListener("focus", showAc);
-  fCat.addEventListener("input", showAc);
-  fCat.addEventListener("blur", function () { setTimeout(hideAc, 120); });
-  fCat.addEventListener("keydown", function (ev) {
-    if (acList.hidden) return;
-    var items = acList.querySelectorAll(".ac-item");
-    if (ev.key === "ArrowDown") { ev.preventDefault(); acActive = Math.min(acActive + 1, items.length - 1); }
-    else if (ev.key === "ArrowUp") { ev.preventDefault(); acActive = Math.max(acActive - 1, 0); }
-    else if (ev.key === "Enter" && acActive >= 0) { ev.preventDefault(); fCat.value = items[acActive].dataset.name; hideAc(); return; }
-    else if (ev.key === "Escape") { hideAc(); return; }
-    else return;
-    items.forEach(function (el, i) { el.classList.toggle("active", i === acActive); });
-  });
-  function chooseCategory(name) {
-    fCat.value = name;
-    hideAc();
-    // that's the last field in the usual flow — dismiss the keyboard so
-    // Log entry is visible right away instead of needing a scroll
-    fCat.blur();
-  }
-  acList.addEventListener("mousedown", function (ev) {
-    var item = ev.target.closest(".ac-item");
-    if (!item) return;
-    ev.preventDefault();
-    chooseCategory(item.dataset.name);
-  });
-
-  // task autocomplete, from the task catalog set up on the Categories page —
-  // picking a suggestion autofills its category (still editable afterward)
-  var taskAc = document.getElementById("taskAc");
-  var taskAcActive = -1;
-  function taskAcMatches() {
-    var q = fTask.value.trim().toLowerCase();
+  function taskMatches(query) {
+    var q = (query || "").trim().toLowerCase();
     if (!q) return [];
     return Object.keys(state.taskCatalog)
       .filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; })
@@ -3056,19 +3034,111 @@
       })
       .slice(0, 8);
   }
-  function showTaskAc() {
-    var m = taskAcMatches();
-    if (!m.length) { hideTaskAc(); return; }
-    taskAcActive = -1;
-    taskAc.innerHTML = m.map(function (t, i) {
-      var cat = state.taskCatalog[t];
-      return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(t) + '" data-cat="' + escapeHtml(cat) + '">' +
-        escapeHtml(t) + '<span class="cnt">' + escapeHtml(cat) + "</span></div>";
-    }).join("");
-    taskAc.hidden = false;
-    fTask.setAttribute("aria-expanded", "true");
+  // wires an input + its .ac-list sibling into a category dropdown;
+  // onPick(name) runs when a suggestion is chosen (click or Enter). Returns
+  // a hide() function callers can use to dismiss the list from elsewhere.
+  function wireCategoryAc(input, list, onPick) {
+    var active = -1;
+    function show() {
+      var m = categoryMatches(input.value);
+      if (!m.length) { hide(); return; }
+      active = -1;
+      list.innerHTML = m.map(function (x, i) {
+        return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(x.name) + '">' +
+          escapeHtml(x.name) + (x.count ? '<span class="cnt">' + x.count + "×</span>" : "") + "</div>";
+      }).join("");
+      list.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+    }
+    function hide() { list.hidden = true; active = -1; input.setAttribute("aria-expanded", "false"); }
+    input.addEventListener("focus", show);
+    input.addEventListener("input", show);
+    input.addEventListener("blur", function () { setTimeout(hide, 120); });
+    input.addEventListener("keydown", function (ev) {
+      if (list.hidden) return;
+      var items = list.querySelectorAll(".ac-item");
+      if (ev.key === "ArrowDown") { ev.preventDefault(); active = Math.min(active + 1, items.length - 1); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); }
+      else if (ev.key === "Enter" && active >= 0) { ev.preventDefault(); onPick(items[active].dataset.name); hide(); return; }
+      else if (ev.key === "Escape") { hide(); return; }
+      else return;
+      items.forEach(function (el, i) { el.classList.toggle("active", i === active); });
+    });
+    list.addEventListener("mousedown", function (ev) {
+      var item = ev.target.closest(".ac-item");
+      if (!item) return;
+      ev.preventDefault();
+      onPick(item.dataset.name);
+      hide();
+    });
+    return hide;
   }
-  function hideTaskAc() { taskAc.hidden = true; taskAcActive = -1; fTask.setAttribute("aria-expanded", "false"); }
+  // wires an input + its .ac-list sibling into a task dropdown, from the task
+  // catalog set up on the Categories page. onPick(name, cat) runs when a
+  // suggestion is chosen — cat is the catalog's mapped category, if any.
+  // onEnterNoPick (optional) runs on Enter when nothing is highlighted, e.g.
+  // to advance focus to the category field. Returns a hide() function.
+  function wireTaskAc(input, list, onPick, onEnterNoPick) {
+    var active = -1;
+    function show() {
+      var m = taskMatches(input.value);
+      if (!m.length) { hide(); return; }
+      active = -1;
+      list.innerHTML = m.map(function (t, i) {
+        var cat = state.taskCatalog[t];
+        return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(t) + '" data-cat="' + escapeHtml(cat) + '">' +
+          escapeHtml(t) + '<span class="cnt">' + escapeHtml(cat) + "</span></div>";
+      }).join("");
+      list.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+    }
+    function hide() { list.hidden = true; active = -1; input.setAttribute("aria-expanded", "false"); }
+    input.addEventListener("input", show);
+    input.addEventListener("focus", show);
+    input.addEventListener("blur", function () { setTimeout(hide, 120); });
+    input.addEventListener("keydown", function (ev) {
+      if (list.hidden) {
+        if (ev.key === "Enter" && input.value.trim() && onEnterNoPick) { ev.preventDefault(); onEnterNoPick(); }
+        return;
+      }
+      var items = list.querySelectorAll(".ac-item");
+      if (ev.key === "ArrowDown") { ev.preventDefault(); active = Math.min(active + 1, items.length - 1); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); }
+      else if (ev.key === "Enter" && active >= 0) { ev.preventDefault(); onPick(items[active].dataset.name, items[active].dataset.cat); hide(); return; }
+      else if (ev.key === "Enter") { ev.preventDefault(); hide(); if (input.value.trim() && onEnterNoPick) onEnterNoPick(); return; }
+      else if (ev.key === "Escape") { hide(); return; }
+      else return;
+      items.forEach(function (el, i) { el.classList.toggle("active", i === active); });
+    });
+    list.addEventListener("mousedown", function (ev) {
+      var item = ev.target.closest(".ac-item");
+      if (!item) return;
+      ev.preventDefault();
+      onPick(item.dataset.name, item.dataset.cat);
+      hide();
+    });
+    return hide;
+  }
+
+  // add form's category field
+  var acList = document.getElementById("categoryAc");
+  // clicking into the category field clears whatever's there (it stays filled after
+  // a log as a sticky default) so a fresh pick / type is quick — this has to
+  // run before wireCategoryAc's own focus handler so the dropdown reflects
+  // the cleared value, not the stale one
+  fCat.addEventListener("focus", function () { fCat.value = ""; });
+  function chooseCategory(name) {
+    fCat.value = name;
+    hideAc();
+    // that's the last field in the usual flow — dismiss the keyboard so
+    // Log entry is visible right away instead of needing a scroll
+    fCat.blur();
+  }
+  var hideAc = wireCategoryAc(fCat, acList, chooseCategory);
+
+  // add form's task field — picking a suggestion autofills its category
+  // (still editable afterward)
+  var taskAc = document.getElementById("taskAc");
   function chooseTask(name, cat) {
     fTask.value = name;
     hideTaskAc();
@@ -3081,30 +3151,20 @@
       fCat.focus();
     }
   }
-  fTask.addEventListener("input", showTaskAc);
-  fTask.addEventListener("focus", showTaskAc);
-  fTask.addEventListener("blur", function () { setTimeout(hideTaskAc, 120); });
-  fTask.addEventListener("keydown", function (ev) {
-    if (taskAc.hidden) {
-      // no suggestions open — return key just advances to Category
-      if (ev.key === "Enter" && fTask.value.trim()) { ev.preventDefault(); fCat.focus(); }
-      return;
-    }
-    var items = taskAc.querySelectorAll(".ac-item");
-    if (ev.key === "ArrowDown") { ev.preventDefault(); taskAcActive = Math.min(taskAcActive + 1, items.length - 1); }
-    else if (ev.key === "ArrowUp") { ev.preventDefault(); taskAcActive = Math.max(taskAcActive - 1, 0); }
-    else if (ev.key === "Enter" && taskAcActive >= 0) { ev.preventDefault(); chooseTask(items[taskAcActive].dataset.name, items[taskAcActive].dataset.cat); return; }
-    else if (ev.key === "Enter") { ev.preventDefault(); hideTaskAc(); if (fTask.value.trim()) fCat.focus(); return; }
-    else if (ev.key === "Escape") { hideTaskAc(); return; }
-    else return;
-    items.forEach(function (el, i) { el.classList.toggle("active", i === taskAcActive); });
-  });
-  taskAc.addEventListener("mousedown", function (ev) {
-    var item = ev.target.closest(".ac-item");
-    if (!item) return;
-    ev.preventDefault();
-    chooseTask(item.dataset.name, item.dataset.cat);
-  });
+  var hideTaskAc = wireTaskAc(fTask, taskAc, chooseTask, function () { fCat.focus(); });
+
+  // each entry's inline edit box gets the same suggestions on its Task and
+  // Category fields — wired fresh whenever the box is opened (see the
+  // timeline click handler below)
+  function attachEditAc(editBox) {
+    var taskEl = editBox.querySelector('[data-f="task"]');
+    var catEl = editBox.querySelector('[data-f="category"]');
+    wireCategoryAc(catEl, editBox.querySelector('[data-ac="category"]'), function (name) { catEl.value = name; });
+    wireTaskAc(taskEl, editBox.querySelector('[data-ac="task"]'), function (name, cat) {
+      taskEl.value = name;
+      if (cat) catEl.value = cat;
+    }, function () { catEl.focus(); });
+  }
 
   // quick-pick chips: every category/task you've defined or ever logged,
   // minus ones you've removed on the "Quick-pick chips" menu page. Order is
@@ -3205,6 +3265,7 @@
         attachTimeInput(editBox.querySelector('[data-f="time"]'));
         var endEl = editBox.querySelector('[data-f="end"]');
         attachTimeInput(endEl);
+        attachEditAc(editBox);
         // an ongoing alongside entry: default its end to "now" so a quick Save
         // just closes it; first tap on the field wipes it for a different time
         if (endEl.dataset.prefillNow === "1" && !endEl.value) {
@@ -3345,8 +3406,9 @@
   // list mid-typing and drop focus
   abcList.addEventListener("change", function (ev) {
     var ta = ev.target.closest(".abc-textarea");
-    if (!ta) return;
-    updateAbcNote(ta.closest(".abc-card").dataset.id, ta.dataset.field, ta.value);
+    if (ta) { updateAbcNote(ta.closest(".abc-card").dataset.id, ta.dataset.field, ta.value); return; }
+    var dateEl = ev.target.closest(".abc-date-input");
+    if (dateEl) { setAbcDate(dateEl.closest(".abc-card").dataset.id, dateEl.value); return; }
   });
 
   function updateTabbar() {
