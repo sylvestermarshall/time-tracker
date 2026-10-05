@@ -708,6 +708,12 @@
   var flushTimer = null;
   var syncMode = "init";
   var viewDate = todayKey();
+  // per-viewer display choice: count overlapping ("alongside") time only as
+  // the focus-split share actually spent on each task, rather than the full
+  // overlapping duration. Data itself is never changed by this.
+  var EXACT_ONLY_KEY = "time-tracker-exact-only";
+  var exactOnly = false;
+  try { exactOnly = localStorage.getItem(EXACT_ONLY_KEY) === "1"; } catch (e) {}
   var route = "home";              // home · day · overview · goals · categories · menu · compare
   var goalsView = "categories";    // within the goals route: "categories" or "tasks"
   // compare route's own two dates + up to 3 categories — independent of the
@@ -1469,6 +1475,30 @@
     }
     return finish();
   }
+  // milliseconds each non-stop entry on `dayK` counts for in totals: its full
+  // duration normally, or — in exact-only mode — just its focus-split share
+  // for entries that overlapped anything (solo entries are unchanged)
+  function creditedMsByEntry(dayK) {
+    var now = Date.now(), isToday = dayK === todayKey();
+    var credit = {};
+    rowsForDay(dayK).forEach(function (r) {
+      if (r.entry.stop) return;
+      var s = new Date(r.entry.startAt).getTime();
+      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
+      credit[r.entry.id] = e == null ? 0 : Math.max(0, e - s);
+    });
+    if (exactOnly) {
+      var split = computeFocusSplit(dayK);
+      Object.keys(credit).forEach(function (id) {
+        if (split.overlapped[id]) credit[id] = (split.minutes[id] || 0) * 60000;
+      });
+    }
+    return credit;
+  }
+  function exactToggleHtml() {
+    return '<label class="check-row exact-only-row"><input type="checkbox" class="exact-only-toggle"' +
+      (exactOnly ? " checked" : "") + "> Show exact duration only</label>";
+  }
   // which of the given (currently ongoing) rows has focus right now, for the
   // Home pill row's highlighted state — same "latest applicable switch, else
   // whoever started first" rule computeFocusSplit uses per segment, just
@@ -1720,16 +1750,12 @@
   // entries both count (matches how Overview's byCat totals work), and an
   // entry still running today counts up to now, same as durMs in renderOverview
   function categoryMinutesForDay(dayK, cat) {
-    var isToday = dayK === todayKey();
-    var now = Date.now();
+    var credit = creditedMsByEntry(dayK);
     var ms = 0;
     rowsForDay(dayK).forEach(function (r) {
       if (r.entry.stop) return;
       if ((r.entry.category || "—") !== cat) return;
-      var s = new Date(r.entry.startAt).getTime();
-      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
-      if (e == null) return;
-      ms += Math.max(0, e - s);
+      ms += credit[r.entry.id] || 0;
     });
     return Math.round(ms / 60000);
   }
@@ -2065,7 +2091,8 @@
     var box = document.getElementById("trendBody");
     var cats = manageableCategories().sort(function (a, b) { return a.localeCompare(b); });
 
-    var html = '<p class="goals-intro">Pick a category and a date range to see how much time you spent on it, day by day.</p>';
+    var html = '<p class="goals-intro">Pick a category and a date range to see how much time you spent on it, day by day.</p>' +
+      exactToggleHtml();
 
     if (!cats.length) {
       html += '<p class="goals-empty">No categories yet — log a few entries first.</p>';
@@ -2179,18 +2206,13 @@
   // ---------- overview page ----------
   function renderOverview() {
     var box = document.getElementById("overviewBody");
-    var now = Date.now();
     var isToday = viewDate === todayKey();
     var rows = rowsForDay(viewDate).filter(function (r) { return !r.entry.stop; });
 
-    function durMs(r) {
-      var s = new Date(r.entry.startAt).getTime();
-      var e = r.endAt ? new Date(r.endAt).getTime() : (r.ongoing && isToday ? now : null);
-      return e == null ? 0 : Math.max(0, e - s);
-    }
+    var credit = creditedMsByEntry(viewDate);
     var wallMs = 0, alongMs = 0, byCat = {};
     rows.forEach(function (r) {
-      var d = durMs(r);
+      var d = credit[r.entry.id] || 0;
       if (r.lane === "main") wallMs += d; else alongMs += d;
       var c = r.entry.category || "—";
       byCat[c] = (byCat[c] || 0) + d;
@@ -2205,7 +2227,7 @@
     items.sort(function (a, b) { return b.spent - a.spent; });
 
     if (!items.length) {
-      box.innerHTML = '<p class="ov-empty">Nothing logged yet for this day.</p>';
+      box.innerHTML = exactToggleHtml() + '<p class="ov-empty">Nothing logged yet for this day.</p>';
       return;
     }
 
@@ -2262,7 +2284,7 @@
       "</div>";
     }).join("");
 
-    box.innerHTML = gist + '<div class="ov-section-label">Where your time went</div>' + list;
+    box.innerHTML = exactToggleHtml() + gist + '<div class="ov-section-label">Where your time went</div>' + list;
   }
 
   // ---------- day export (CSV + a report to paste into ChatGPT) ----------
@@ -3374,6 +3396,12 @@
       trendStart = dateKey(new Date(Date.now() - (n - 1) * 86400000));
       render();
     }
+  });
+  document.addEventListener("change", function (ev) {
+    if (!ev.target.classList.contains("exact-only-toggle")) return;
+    exactOnly = ev.target.checked;
+    try { localStorage.setItem(EXACT_ONLY_KEY, exactOnly ? "1" : "0"); } catch (e) {}
+    render();
   });
   trendBody.addEventListener("change", function (ev) {
     if (ev.target.id === "trendStartInput") { trendStart = ev.target.value || trendStart; render(); }
