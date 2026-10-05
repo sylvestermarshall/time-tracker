@@ -2582,10 +2582,12 @@
         "</div>" +
         '<div class="entry-edit" hidden>' +
           '<div class="row">' +
-            '<div class="field" style="flex:1"><label class="lbl">Start time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '"></div>' +
-            '<div class="field" style="flex:1"><label class="lbl">End time</label><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="end"' +
+            '<div class="field" style="flex:1"><label class="lbl">Start time</label><div class="time-wrap"><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="time" value="' + fmtClock(e.startAt) + '">' +
+              '<button type="button" class="btn btn-ghost btn-small" data-act="now-start">Now</button></div></div>' +
+            '<div class="field" style="flex:1"><label class="lbl">End time</label><div class="time-wrap"><input type="text" class="time-in" inputmode="numeric" maxlength="5" data-f="end"' +
               (along && !e.endAt ? ' data-prefill-now="1"' : "") +
-              ' value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '"></div>' +
+              ' value="' + (e.endAt ? fmtClock(e.endAt) : "") + '" placeholder="' + (r.autoEndAt ? fmtClock(r.autoEndAt) + " (auto)" : "ongoing") + '">' +
+              '<button type="button" class="btn btn-ghost btn-small" data-act="now-end">Now</button></div></div>' +
           "</div>" +
           '<div class="field"><label class="lbl">Task</label><input type="text" data-f="task" autocomplete="off" value="' + escapeHtml(e.task) + '"><div class="ac-list" data-ac="task" hidden></div></div>' +
           '<div class="field"><label class="lbl">Category</label><input type="text" data-f="category" autocomplete="off" value="' + escapeHtml(e.category) + '"><div class="ac-list" data-ac="category" hidden></div></div>' +
@@ -3300,6 +3302,8 @@
       }
       return;
     }
+    if (act === "now-start") { editBox.querySelector('[data-f="time"]').value = nowHHMM(); return; }
+    if (act === "now-end") { editBox.querySelector('[data-f="end"]').value = nowHHMM(); return; }
     if (act === "cancel") { editBox.hidden = true; render(); return; }
     if (act === "delete") { if (confirm("Delete this entry?")) deleteEntry(id); return; }
     if (act === "end-now") { endEntryNow(id); return; }
