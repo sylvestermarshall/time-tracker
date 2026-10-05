@@ -634,8 +634,8 @@
 <!-- persistent bottom navigation -->
 <nav class="tabbar" id="tabbar">
   <button type="button" class="tab-btn" data-tab="home"><i data-lucide="house"></i><span>Home</span></button>
-  <button type="button" class="tab-btn" data-tab="compare"><i data-lucide="git-compare"></i><span>Compare</span></button>
-  <button type="button" class="tab-btn" data-tab="categories"><i data-lucide="layout-grid"></i><span>Categories</span></button>
+  <button type="button" class="tab-btn" data-tab="overview"><i data-lucide="bar-chart-2"></i><span>Overview</span></button>
+  <button type="button" class="tab-btn" data-tab="abc"><i data-lucide="brain"></i><span>ABC</span></button>
   <button type="button" class="tab-btn" data-tab="menu"><i data-lucide="menu"></i><span>Menu</span></button>
 </nav>
 
@@ -1888,12 +1888,12 @@
 
   // ---------- menu page: hub for pages that moved off the bottom tab bar ----------
   var MENU_ITEMS = [
-    { act: "menu-overview", icon: "bar-chart-2", label: "Overview", go: function () { goToOverview(); } },
+    { act: "menu-categories", icon: "layout-grid", label: "Categories", go: goToCategories },
+    { act: "menu-compare", icon: "git-compare", label: "Compare", go: goToCompare },
     { act: "menu-goals", icon: "target", label: "Goals", go: goToGoals },
     { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
     { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
-    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend },
-    { act: "menu-abc", icon: "brain", label: "ABC", go: goToAbc }
+    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -3338,7 +3338,7 @@
 
   // ---------- bottom tab bar ----------
   var TAB_ACTIONS = {
-    home: goHome, compare: goToCompare, categories: goToCategories, menu: goToMenu
+    home: goHome, overview: goToOverview, abc: goToAbc, menu: goToMenu
   };
   document.getElementById("tabbar").addEventListener("click", function (ev) {
     var btn = ev.target.closest(".tab-btn");
@@ -3440,11 +3440,9 @@
   });
 
   function updateTabbar() {
-    // Overview/Goals/Tasks/Day have no tab of their own anymore — they're
-    // reached through Menu, so anything else falls back to highlighting it.
-    // The detail page is a drill-down from Compare, so it counts as Compare.
-    var isCompareish = route === "compare" || route === "compareDetail";
-    var activeTab = route === "home" ? "home" : isCompareish ? "compare" : route === "categories" ? "categories" : "menu";
+    // Goals/Tasks/Categories/Compare/Chips/Trend/Day have no tab of their own —
+    // they're reached through Menu, so anything else falls back to highlighting it.
+    var activeTab = route === "home" || route === "overview" || route === "abc" ? route : "menu";
     document.querySelectorAll("#tabbar .tab-btn").forEach(function (btn) {
       btn.classList.toggle("active", btn.dataset.tab === activeTab);
     });
