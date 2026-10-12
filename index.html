@@ -327,6 +327,28 @@
   .schedule-dur .sep { opacity: 0.5; }
   .schedule-dur .live.over { color: var(--danger); }
   .schedule-dur .live.under { color: var(--good); }
+  /* per-row insert/delete icons — only shown once a row has content, so an
+     unused blank slot still looks exactly like before */
+  .schedule-row-actions { display: flex; gap: 0.3rem; flex: 0 0 auto; }
+  .schedule-icon-btn {
+    width: 1.9rem; height: 1.9rem; flex-shrink: 0; padding: 0;
+    border: 1px solid var(--line); border-radius: var(--radius-pill);
+    background: var(--surface-raised); color: var(--ink-soft);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .schedule-icon-btn svg { width: 0.85rem; height: 0.85rem; }
+  .schedule-icon-btn:active { border-color: var(--accent); color: var(--accent); }
+  .schedule-icon-btn.danger:active { border-color: var(--danger); color: var(--danger); }
+  /* the "insert a task after this row" mini-form */
+  .schedule-insert-form {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+    background: var(--surface-raised); border: 1px dashed var(--line);
+    border-radius: var(--radius-control); padding: 0.6rem; margin-top: 0.4rem;
+  }
+  .schedule-insert-form .schedule-ins-time { flex: 0 0 4.4rem; width: 4.4rem; text-align: center; }
+  .schedule-insert-form .schedule-ins-dur { flex: 0 0 7rem; width: 7rem; }
+  .schedule-insert-form .schedule-ins-text { flex: 1 1 9rem; min-width: 7rem; }
+  .schedule-insert-actions { display: flex; gap: 0.5rem; flex: 1 1 100%; justify-content: flex-end; }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -767,6 +789,9 @@
   var trendCat = "";
   var trendEnd = todayKey();
   var trendStart = dateKey(new Date(Date.now() - 6 * 86400000));
+  // schedule route: index of the row whose "insert a task after this one"
+  // mini-form is currently open, or -1 if none is
+  var scheduleInsertAfter = -1;
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -2312,6 +2337,24 @@
     }
     return '<div class="schedule-dur">' + html + "</div>";
   }
+  // the small "insert a task after this row" form: time (prefilled with
+  // whatever's about to be displaced), duration (required — there's no
+  // "next row" to measure a gap from yet, since inserting means carving out
+  // time that wasn't there before), and the task text
+  function scheduleInsertFormHtml(afterIdx) {
+    var displaced = state.schedule[afterIdx + 1];
+    var prefillTime = displaced ? displaced.time : "";
+    return '<div class="schedule-insert-form">' +
+      '<input type="text" class="time-in schedule-ins-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+        'placeholder="0930" aria-label="New task time" value="' + escapeHtml(prefillTime) + '">' +
+      '<input type="text" class="schedule-ins-dur" inputmode="numeric" placeholder="Duration e.g. 30m" aria-label="New task duration">' +
+      '<input type="text" class="schedule-ins-text" placeholder="New task" aria-label="New task name">' +
+      '<div class="schedule-insert-actions">' +
+        '<button type="button" class="btn btn-ghost btn-small" data-act="schedule-insert-cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary btn-small" data-act="schedule-insert-save" data-idx="' + afterIdx + '">Add</button>' +
+      "</div>" +
+    "</div>";
+  }
   function renderSchedulePage() {
     document.getElementById("pageTitle").textContent = "Schedule";
     var box = document.getElementById("scheduleList");
@@ -2319,23 +2362,41 @@
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Each row also shows <b>Plan</b> (the gap you first set to the next task) → <b>Actual</b> (what it’s turned into since) — push the next task later and Actual turns red, pull it earlier and it turns green.</p>' +
+      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Each row also shows <b>Plan</b> (the gap you first set to the next task) → <b>Actual</b> (what it’s turned into since) — push the next task later and Actual turns red, pull it earlier and it turns green. On a filled-in row, <i data-lucide="plus"></i> inserts a new task after it (with its own duration, pushing everything later) and <i data-lucide="trash-2"></i> deletes it (pulling everything after it earlier to close the gap).</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
       "</div>" +
       '<div class="schedule-rows">' +
       state.schedule.map(function (row, i) {
-        return '<div class="schedule-row">' +
-          '<input type="text" class="time-in schedule-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
-            'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
-          '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
-            'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
-          scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
+        var used = !!(row.time || row.text);
+        return '<div class="schedule-row-wrap">' +
+          '<div class="schedule-row">' +
+            '<input type="text" class="time-in schedule-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+              'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
+            '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
+              'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
+            scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
+            (used ? '<div class="schedule-row-actions">' +
+              '<button type="button" class="schedule-icon-btn" data-act="schedule-insert" data-idx="' + i + '" ' +
+                'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
+              '<button type="button" class="schedule-icon-btn danger" data-act="schedule-delete" data-idx="' + i + '" ' +
+                'aria-label="Delete row ' + (i + 1) + '" title="Delete task"><i data-lucide="trash-2"></i></button>' +
+            "</div>" : "") +
+          "</div>" +
+          (scheduleInsertAfter === i ? scheduleInsertFormHtml(i) : "") +
         "</div>";
       }).join("") +
       "</div>";
     box.querySelectorAll(".schedule-time").forEach(attachTimeInput);
+    var insTimeEl = box.querySelector(".schedule-ins-time");
+    if (insTimeEl) {
+      attachTimeInput(insTimeEl);
+      // time is prefilled from context; duration is the one thing that's
+      // actually new, so that's what's worth jumping straight into
+      var insDurEl = box.querySelector(".schedule-ins-dur");
+      if (insDurEl) insDurEl.focus();
+    }
   }
 
   // ---------- overview page ----------
@@ -2924,6 +2985,51 @@
     var now = new Date().toISOString();
     queueMutation(function (s) {
       s.schedule = emptySchedule().map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
+      return s;
+    });
+  }
+  // true if the schedule's last slot is already in use — inserting would have
+  // nowhere to push the displaced tail row, so the caller should refuse
+  function scheduleIsFull() {
+    var last = state.schedule[state.schedule.length - 1];
+    return !!(last.time || last.text);
+  }
+  // inserts a new task right after afterIdx, shifting every row from there on
+  // down by one slot (the last slot must already be free — callers check
+  // scheduleIsFull() first) and pushing every row after the new one later by
+  // dur minutes, since an insert carves out time that wasn't scheduled before
+  function insertScheduleTask(afterIdx, t, dur, text) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.schedule.slice();
+      for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
+      for (var i = afterIdx + 2; i < rows.length; i++) {
+        if (rows[i] && rows[i].time) {
+          rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + dur), updatedAt: now });
+        }
+      }
+      rows[afterIdx + 1] = { time: t, text: text || "", plannedMin: dur, updatedAt: now };
+      s.schedule = rows;
+      return s;
+    });
+  }
+  // deletes the task at idx, closing the gap it left by pulling every row
+  // after it earlier by however long its own live gap to the next row was
+  function deleteScheduleTask(idx) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.schedule.slice();
+      var gap = scheduleLiveDurationMin(rows, idx) || 0;
+      for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
+      if (gap) {
+        for (var i = idx; i < rows.length - 1; i++) {
+          if (rows[i] && rows[i].time) {
+            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) - gap), updatedAt: now });
+          }
+        }
+      }
+      rows[rows.length - 1] = { time: "", text: "", plannedMin: null, updatedAt: now };
+      s.schedule = rows;
       return s;
     });
   }
@@ -3663,6 +3769,33 @@
   scheduleList.addEventListener("click", function (ev) {
     if (ev.target.closest("#scheduleResetBtn") && confirm("Clear the whole schedule? This can't be undone.")) {
       resetSchedule();
+      return;
+    }
+    var insBtn = ev.target.closest('[data-act="schedule-insert"]');
+    if (insBtn) { scheduleInsertAfter = +insBtn.dataset.idx; render(); return; }
+    var cancelBtn = ev.target.closest('[data-act="schedule-insert-cancel"]');
+    if (cancelBtn) { scheduleInsertAfter = -1; render(); return; }
+    var saveBtn = ev.target.closest('[data-act="schedule-insert-save"]');
+    if (saveBtn) {
+      if (scheduleIsFull()) { alert("Schedule is full (30 rows) — delete or finish a task first."); return; }
+      var form = saveBtn.closest(".schedule-insert-form");
+      var timeEl = form.querySelector(".schedule-ins-time");
+      var durEl = form.querySelector(".schedule-ins-dur");
+      var textEl = form.querySelector(".schedule-ins-text");
+      var t = normTime(timeEl.value);
+      if (!t) { timeEl.focus(); return; }
+      var dur = Math.round(parseDuration(durEl.value));
+      if (!dur || dur <= 0) { durEl.focus(); return; }
+      // close the form before mutating — queueMutation renders synchronously,
+      // so this has to be set first or the form reopens on the (now shifted)
+      // row at the same index with stale content
+      scheduleInsertAfter = -1;
+      insertScheduleTask(+saveBtn.dataset.idx, t, dur, textEl.value);
+      return;
+    }
+    var delBtn = ev.target.closest('[data-act="schedule-delete"]');
+    if (delBtn && confirm("Delete this task? Everything after it moves up to close the gap.")) {
+      deleteScheduleTask(+delBtn.dataset.idx);
     }
   });
   scheduleList.addEventListener("change", function (ev) {
