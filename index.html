@@ -300,9 +300,20 @@
 
   /* ---------- schedule page: 30 fixed time + word rows ---------- */
   .schedule-rows { display: flex; flex-direction: column; gap: 0.5rem; }
-  .schedule-row { display: flex; align-items: center; gap: 0.5rem; }
+  .schedule-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .schedule-row .schedule-time { flex: 0 0 4.4rem; width: 4.4rem; text-align: center; padding-left: 0.4rem; padding-right: 0.4rem; }
-  .schedule-row .schedule-text { flex: 1; min-width: 0; }
+  .schedule-row .schedule-text { flex: 1 1 8rem; min-width: 6rem; }
+  /* the planned → actual duration readout: "planned" alone until a next row's
+     time makes the gap computable, then "actual" joins and turns red/green if
+     it drifted from the frozen plan */
+  .schedule-dur {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 0.25rem;
+    font-family: "JetBrains Mono", monospace; font-size: 0.72rem; font-weight: 700;
+    color: var(--ink-faint); white-space: nowrap; margin-left: calc(4.4rem + 0.5rem);
+  }
+  .schedule-dur .sep { opacity: 0.5; }
+  .schedule-dur .live.over { color: var(--danger); }
+  .schedule-dur .live.under { color: var(--good); }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -922,7 +933,7 @@
   // plain per-index "later updatedAt wins" rather than a union
   function emptySchedule() {
     var out = [];
-    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", updatedAt: new Date(0).toISOString() });
+    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() });
     return out;
   }
   function normalizeSchedule(raw) {
@@ -931,9 +942,14 @@
     for (var i = 0; i < SCHEDULE_SIZE; i++) {
       var r = arr[i];
       var t = r && typeof r.time === "string" ? normTime(r.time) : "";
+      var planned = r && typeof r.plannedMin === "number" && isFinite(r.plannedMin) && r.plannedMin >= 0 ? Math.round(r.plannedMin) : null;
       out.push({
         time: t,
         text: r && typeof r.text === "string" ? r.text : "",
+        // the duration this row was originally planned for, frozen the first
+        // time it becomes computable and re-frozen only when this row's own
+        // time is directly retyped — see updateScheduleTime
+        plannedMin: planned,
         updatedAt: r && r.updatedAt && !isNaN(new Date(r.updatedAt)) ? new Date(r.updatedAt).toISOString() : new Date(0).toISOString()
       });
     }
@@ -943,8 +959,8 @@
     a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
     var out = [];
     for (var i = 0; i < SCHEDULE_SIZE; i++) {
-      var ra = a[i] || { time: "", text: "", updatedAt: new Date(0).toISOString() };
-      var rb = b[i] || { time: "", text: "", updatedAt: new Date(0).toISOString() };
+      var ra = a[i] || { time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() };
+      var rb = b[i] || { time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() };
       out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
     }
     return out;
@@ -2259,10 +2275,34 @@
   }
 
   // ---------- schedule page: a fixed 30-row time + word day plan ----------
+  // the live/current gap between a row and whatever row after it next has a
+  // time — this is "how long it's actually taking", recomputed fresh every
+  // time (unlike plannedMin, nothing about it is frozen)
+  function scheduleLiveDurationMin(rows, i) {
+    var cur = rows[i], next = rows[i + 1];
+    if (!cur || !cur.time || !next || !next.time) return null;
+    var diff = hhmmToMinutes(next.time) - hhmmToMinutes(cur.time);
+    if (diff <= 0) diff += 1440;
+    return diff;
+  }
+  // the little "planned → actual" readout to the right of a row's text field;
+  // "" (and so nothing rendered) until there's at least one of the two to show
+  function scheduleDurHtml(row, liveMin) {
+    var planned = row.plannedMin;
+    if (planned == null && liveMin == null) return "";
+    var html = "";
+    if (planned != null) html += '<span class="planned">' + fmtMins(planned) + "</span>";
+    if (liveMin != null) {
+      var cls = planned == null ? "" : liveMin > planned ? " over" : liveMin < planned ? " under" : "";
+      if (planned != null) html += '<span class="sep">→</span>';
+      html += '<span class="live' + cls + '">' + fmtMins(liveMin) + "</span>";
+    }
+    return '<div class="schedule-dur">' + html + "</div>";
+  }
   function renderSchedulePage() {
     document.getElementById("pageTitle").textContent = "Schedule";
     var box = document.getElementById("scheduleList");
-    box.innerHTML = '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest.</p>' +
+    box.innerHTML = '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Once a row’s gap to the next one is set, it’s shown as <b>planned → actual</b> — so pushing the next task back to cover a task that ran long shows up right there.</p>' +
       '<div class="schedule-rows">' +
       state.schedule.map(function (row, i) {
         return '<div class="schedule-row">' +
@@ -2270,6 +2310,7 @@
             'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
           '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
             'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
+          scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
         "</div>";
       }).join("") +
       "</div>";
@@ -2817,15 +2858,33 @@
           }
         }
       }
+      // this row's own time was just (re-)typed directly — that's a deliberate
+      // (re)plan of this slot, so its planned-duration baseline (re)freezes
+      // here against whatever the next row's time now is, post-cascade
+      rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
+      // backfill: any row whose planned duration was never captured, but now
+      // has a time on both itself and its neighbor, gets one frozen in — this
+      // is what captures e.g. task A's original 60m the first time B's time
+      // is typed in, without ever touching A's own time field directly
+      for (var j = 0; j < rows.length - 1; j++) {
+        if (rows[j].plannedMin == null && rows[j].time && rows[j + 1].time) {
+          rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
+        }
+      }
       s.schedule = rows;
       return s;
     });
     // queueMutationQuiet skips render() (so a tap into the next row doesn't
     // get its DOM node yanked out from under it mid-gesture) — reflect any
-    // cascaded shift in the other rows' inputs directly instead
-    document.querySelectorAll(".schedule-time").forEach(function (inp) {
-      var i = +inp.dataset.idx;
-      if (inp !== el && state.schedule[i]) inp.value = state.schedule[i].time;
+    // cascaded shift and any planned/actual duration changes directly instead
+    document.querySelectorAll(".schedule-row").forEach(function (rowEl, i) {
+      var row = state.schedule[i];
+      var timeInp = rowEl.querySelector(".schedule-time");
+      if (timeInp !== el) timeInp.value = row.time;
+      var durEl = rowEl.querySelector(".schedule-dur");
+      var html = scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i));
+      if (durEl) { if (html) durEl.outerHTML = html; else durEl.remove(); }
+      else if (html) rowEl.insertAdjacentHTML("beforeend", html);
     });
   }
   function updateScheduleText(idx, value) {
