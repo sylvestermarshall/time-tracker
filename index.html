@@ -2996,16 +2996,23 @@
   }
   // inserts a new task right after afterIdx, shifting every row from there on
   // down by one slot (the last slot must already be free — callers check
-  // scheduleIsFull() first) and pushing every row after the new one later by
-  // dur minutes, since an insert carves out time that wasn't scheduled before
+  // scheduleIsFull() first), landing the row that used to be next at exactly
+  // t + dur (not just "+dur from wherever it used to be") so the new task's
+  // own Actual reads as dur, not dur plus however far its typed start time
+  // happened to land from the slot's old time — and everything further down
+  // shifts by that same corrected amount to stay consistent
   function insertScheduleTask(afterIdx, t, dur, text) {
     var now = new Date().toISOString();
     queueMutation(function (s) {
       var rows = s.schedule.slice();
+      var nextOld = rows[afterIdx + 1] ? rows[afterIdx + 1].time : "";
+      var delta = nextOld ? (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld)) : 0;
       for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
-      for (var i = afterIdx + 2; i < rows.length; i++) {
-        if (rows[i] && rows[i].time) {
-          rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + dur), updatedAt: now });
+      if (delta) {
+        for (var i = afterIdx + 2; i < rows.length; i++) {
+          if (rows[i] && rows[i].time) {
+            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
+          }
         }
       }
       rows[afterIdx + 1] = { time: t, text: text || "", plannedMin: dur, updatedAt: now };
