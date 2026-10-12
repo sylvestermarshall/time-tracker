@@ -2304,7 +2304,11 @@
   function renderSchedulePage() {
     document.getElementById("pageTitle").textContent = "Schedule";
     var box = document.getElementById("scheduleList");
-    box.innerHTML = '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Once a row’s gap to the next one is set, it’s shown as <b>planned → actual</b> — so pushing the next task back to cover a task that ran long shows up right there.</p>' +
+    box.innerHTML =
+      '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" id="scheduleResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
+      "</div>" +
+      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Once a row’s gap to the next one is set, it’s shown as <b>planned → actual</b> — so pushing the next task back to cover a task that ran long shows up right there.</p>' +
       '<div class="schedule-rows">' +
       state.schedule.map(function (row, i) {
         return '<div class="schedule-row">' +
@@ -2895,6 +2899,16 @@
       var rows = s.schedule.slice();
       rows[idx] = Object.assign({}, rows[idx], { text: value, updatedAt: now });
       s.schedule = rows;
+      return s;
+    });
+  }
+  function resetSchedule() {
+    // stamp every row with "now" (rather than emptySchedule()'s epoch
+    // default) so the clear-out actually wins the next merge against a gist
+    // copy that still has the old rows with later updatedAts
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.schedule = emptySchedule().map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
       return s;
     });
   }
@@ -3631,6 +3645,11 @@
 
   // ---------- schedule page ----------
   var scheduleList = document.getElementById("scheduleList");
+  scheduleList.addEventListener("click", function (ev) {
+    if (ev.target.closest("#scheduleResetBtn") && confirm("Clear the whole schedule? This can't be undone.")) {
+      resetSchedule();
+    }
+  });
   scheduleList.addEventListener("change", function (ev) {
     var timeEl = ev.target.closest(".schedule-time");
     if (timeEl) { updateScheduleTime(+timeEl.dataset.idx, timeEl.value, timeEl); return; }
