@@ -301,6 +301,17 @@
   /* ---------- schedule page: 30 fixed time + word rows ---------- */
   .schedule-rows { display: flex; flex-direction: column; gap: 0.5rem; }
   .schedule-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  /* column header labeling the Plan → Actual box below it — mirrors the row's
+     own flex widths (time / text spacers stay blank) so "Plan → Actual" lands
+     directly above the duration column it's naming */
+  .schedule-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .schedule-head .sp-time { flex: 0 0 4.4rem; width: 4.4rem; }
+  .schedule-head .sp-text { flex: 1 1 8rem; min-width: 6rem; }
+  .schedule-head .sp-dur {
+    flex: 0 0 7.4rem; width: 7.4rem; text-align: center;
+    font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--ink-faint);
+  }
   .schedule-row .schedule-time { flex: 0 0 4.4rem; width: 4.4rem; text-align: center; padding-left: 0.4rem; padding-right: 0.4rem; }
   .schedule-row .schedule-text { flex: 1 1 8rem; min-width: 6rem; }
   /* the planned → actual duration readout: "planned" alone until a next row's
@@ -2308,7 +2319,11 @@
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Once a row’s gap to the next one is set, it’s shown as <b>planned → actual</b> — so pushing the next task back to cover a task that ran long shows up right there.</p>' +
+      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Each row also shows <b>Plan</b> (the gap you first set to the next task) → <b>Actual</b> (what it’s turned into since) — push the next task later and Actual turns red, pull it earlier and it turns green.</p>' +
+      '<div class="schedule-head">' +
+        '<span class="sp-time"></span><span class="sp-text"></span>' +
+        '<span class="sp-dur">Plan → Actual</span>' +
+      "</div>" +
       '<div class="schedule-rows">' +
       state.schedule.map(function (row, i) {
         return '<div class="schedule-row">' +
