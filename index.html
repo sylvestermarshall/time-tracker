@@ -298,6 +298,12 @@
   .abc-status-yes.active { background: var(--good-soft); border-color: var(--good); color: var(--good); }
   .abc-status-no.active { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
+  /* ---------- schedule page: 30 fixed time + word rows ---------- */
+  .schedule-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+  .schedule-row { display: flex; align-items: center; gap: 0.5rem; }
+  .schedule-row .schedule-time { flex: 0 0 4.4rem; width: 4.4rem; text-align: center; padding-left: 0.4rem; padding-right: 0.4rem; }
+  .schedule-row .schedule-text { flex: 1; min-width: 0; }
+
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
   .compare-chip {
@@ -620,6 +626,11 @@
     <div id="abcList"></div>
   </div>
 
+  <!-- SCHEDULE: a fixed 30-row time + word plan for laying out a day -->
+  <div id="schedulePage" hidden>
+    <div id="scheduleList"></div>
+  </div>
+
   <!-- COMPARE: two dates, up to 3 categories, cumulative time-of-day charts -->
   <div id="comparePage" hidden>
     <div id="compareBody"></div>
@@ -700,6 +711,7 @@
   var STORAGE_KEY = "time-tracker-data";
   var TOKEN_KEY = "time-tracker-gh-token";
   var GIST_ID_KEY = "time-tracker-gist-id";
+  var SCHEDULE_SIZE = 30;
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
@@ -900,8 +912,42 @@
       deletedGoalKinds: {}, goalKindRevivals: {},
       deletedTaskGoals: {}, taskGoalRevivals: {},
       focusSwitches: [],
-      abcNotes: [], deletedAbc: {}
+      abcNotes: [], deletedAbc: {},
+      schedule: emptySchedule()
     };
+  }
+
+  // a fixed 30-row time+word plan (Menu > Schedule) — unlike entries/abcNotes
+  // this is positional, not id-based: row i is always row i, so merging is a
+  // plain per-index "later updatedAt wins" rather than a union
+  function emptySchedule() {
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", updatedAt: new Date(0).toISOString() });
+    return out;
+  }
+  function normalizeSchedule(raw) {
+    var arr = Array.isArray(raw) ? raw : [];
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) {
+      var r = arr[i];
+      var t = r && typeof r.time === "string" ? normTime(r.time) : "";
+      out.push({
+        time: t,
+        text: r && typeof r.text === "string" ? r.text : "",
+        updatedAt: r && r.updatedAt && !isNaN(new Date(r.updatedAt)) ? new Date(r.updatedAt).toISOString() : new Date(0).toISOString()
+      });
+    }
+    return out;
+  }
+  function mergeSchedule(a, b) {
+    a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) {
+      var ra = a[i] || { time: "", text: "", updatedAt: new Date(0).toISOString() };
+      var rb = b[i] || { time: "", text: "", updatedAt: new Date(0).toISOString() };
+      out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
+    }
+    return out;
   }
 
   // tombstones so a delete on one device isn't undone by a merge with another
@@ -1088,7 +1134,8 @@
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
       focusSwitches: focusSwitches,
-      abcNotes: abcNotes, deletedAbc: deletedAbc
+      abcNotes: abcNotes, deletedAbc: deletedAbc,
+      schedule: normalizeSchedule(raw.schedule)
     };
   }
 
@@ -1183,7 +1230,8 @@
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
       focusSwitches: focusSwitches,
-      abcNotes: abcNotes, deletedAbc: deletedAbc
+      abcNotes: abcNotes, deletedAbc: deletedAbc,
+      schedule: mergeSchedule(a.schedule, b.schedule)
     });
   }
 
@@ -1583,6 +1631,8 @@
       route = "trend";
     } else if (h === "abc") {
       route = "abc";
+    } else if (h === "schedule") {
+      route = "schedule";
     } else if (h === "compare") {
       route = "compare";
     } else if (h === "comparedetail" && compareDetailCat) {
@@ -1603,8 +1653,9 @@
     var isChips = route === "chips";
     var isTrend = route === "trend";
     var isAbc = route === "abc";
+    var isSchedule = route === "schedule";
     var dated = route === "day" || isOverview;
-    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend || isAbc;
+    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend || isAbc || isSchedule;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
@@ -1616,6 +1667,7 @@
     document.getElementById("chipsPage").hidden = !isChips;
     document.getElementById("trendPage").hidden = !isTrend;
     document.getElementById("abcPage").hidden = !isAbc;
+    document.getElementById("schedulePage").hidden = !isSchedule;
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
@@ -1633,6 +1685,7 @@
   function goToChips() { location.hash = "#chips"; }
   function goToTrend() { location.hash = "#trend"; }
   function goToAbc() { location.hash = "#abc"; }
+  function goToSchedule() { location.hash = "#schedule"; }
   function goToCompare() { location.hash = "#compare"; }
   function goToCompareDetail(cat) { compareDetailCat = cat; location.hash = "#comparedetail"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
@@ -1659,6 +1712,7 @@
     if (route === "chips") { renderChipsPage(); return; }
     if (route === "trend") { renderTrend(); return; }
     if (route === "abc") { renderAbcPage(); return; }
+    if (route === "schedule") { renderSchedulePage(); return; }
     if (route === "compare") { renderCompare(); return; }
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
@@ -1893,7 +1947,8 @@
     { act: "menu-goals", icon: "target", label: "Goals", go: goToGoals },
     { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
     { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
-    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend }
+    { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend },
+    { act: "menu-schedule", icon: "calendar-clock", label: "Schedule", go: goToSchedule }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -2201,6 +2256,24 @@
         '<i data-lucide="plus"></i>New entry</button>';
     html += notes.length ? notes.map(cardHtml).join("") : '<p class="goals-empty">No entries yet.</p>';
     box.innerHTML = html;
+  }
+
+  // ---------- schedule page: a fixed 30-row time + word day plan ----------
+  function renderSchedulePage() {
+    document.getElementById("pageTitle").textContent = "Schedule";
+    var box = document.getElementById("scheduleList");
+    box.innerHTML = '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest.</p>' +
+      '<div class="schedule-rows">' +
+      state.schedule.map(function (row, i) {
+        return '<div class="schedule-row">' +
+          '<input type="text" class="time-in schedule-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+            'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
+          '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
+            'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
+        "</div>";
+      }).join("") +
+      "</div>";
+    box.querySelectorAll(".schedule-time").forEach(attachTimeInput);
   }
 
   // ---------- overview page ----------
@@ -2709,6 +2782,58 @@
       s.abcNotes = s.abcNotes.filter(function (n) { return n.id !== id; });
       s.deletedAbc = Object.assign({}, s.deletedAbc);
       s.deletedAbc[id] = iso;
+      return s;
+    });
+  }
+
+  // ---------- schedule mutations ----------
+  function hhmmToMinutes(hhmm) {
+    var p = hhmm.split(":");
+    return (+p[0]) * 60 + (+p[1]);
+  }
+  function minutesToHHMM(mins) {
+    mins = ((mins % 1440) + 1440) % 1440;
+    return pad(Math.floor(mins / 60)) + ":" + pad(mins % 60);
+  }
+  // editing a row's time shifts every later row with a time set by the same
+  // delta, so bumping task A from 10:00 to 10:30 pushes B/C/etc along with it
+  // instead of leaving the rest of the plan stale
+  function updateScheduleTime(idx, rawValue, el) {
+    var t = normTime(rawValue);
+    el.value = t;
+    var before = (state.schedule[idx] || {}).time || "";
+    if (t === before) return;
+    var now = new Date().toISOString();
+    queueMutationQuiet(function (s) {
+      var rows = s.schedule.slice();
+      rows[idx] = Object.assign({}, rows[idx], { time: t, updatedAt: now });
+      if (before && t) {
+        var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
+        if (delta) {
+          for (var i = idx + 1; i < rows.length; i++) {
+            if (rows[i] && rows[i].time) {
+              rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
+            }
+          }
+        }
+      }
+      s.schedule = rows;
+      return s;
+    });
+    // queueMutationQuiet skips render() (so a tap into the next row doesn't
+    // get its DOM node yanked out from under it mid-gesture) — reflect any
+    // cascaded shift in the other rows' inputs directly instead
+    document.querySelectorAll(".schedule-time").forEach(function (inp) {
+      var i = +inp.dataset.idx;
+      if (inp !== el && state.schedule[i]) inp.value = state.schedule[i].time;
+    });
+  }
+  function updateScheduleText(idx, value) {
+    var now = new Date().toISOString();
+    queueMutationQuiet(function (s) {
+      var rows = s.schedule.slice();
+      rows[idx] = Object.assign({}, rows[idx], { text: value, updatedAt: now });
+      s.schedule = rows;
       return s;
     });
   }
@@ -3441,6 +3566,15 @@
     if (ta) { updateAbcNote(ta.closest(".abc-card").dataset.id, ta.dataset.field, ta.value); return; }
     var dateEl = ev.target.closest(".abc-date-input");
     if (dateEl) { setAbcDate(dateEl.closest(".abc-card").dataset.id, dateEl.value); return; }
+  });
+
+  // ---------- schedule page ----------
+  var scheduleList = document.getElementById("scheduleList");
+  scheduleList.addEventListener("change", function (ev) {
+    var timeEl = ev.target.closest(".schedule-time");
+    if (timeEl) { updateScheduleTime(+timeEl.dataset.idx, timeEl.value, timeEl); return; }
+    var textEl = ev.target.closest(".schedule-text");
+    if (textEl) { updateScheduleText(+textEl.dataset.idx, textEl.value); return; }
   });
 
   function updateTabbar() {
