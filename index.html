@@ -309,7 +309,9 @@
   .schedule-dur {
     flex: 0 0 auto; display: flex; align-items: center; gap: 0.25rem;
     font-family: "JetBrains Mono", monospace; font-size: 0.72rem; font-weight: 700;
-    color: var(--ink-faint); white-space: nowrap; margin-left: calc(4.4rem + 0.5rem);
+    color: var(--ink-faint); white-space: nowrap;
+    background: var(--surface-raised); border: 1px solid var(--line-soft);
+    border-radius: var(--radius-control); padding: 0.45rem 0.55rem;
   }
   .schedule-dur .sep { opacity: 0.5; }
   .schedule-dur .live.over { color: var(--danger); }
