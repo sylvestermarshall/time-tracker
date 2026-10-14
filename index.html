@@ -2385,16 +2385,16 @@
               'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
             scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
             (used ? '<div class="schedule-row-actions">' +
-              '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
-                'data-act="schedule-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
-                'title="Done on time"><i data-lucide="check"></i></button>' +
-              '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
-                'data-act="schedule-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
-                'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
               '<button type="button" class="schedule-icon-btn" data-act="schedule-insert" data-idx="' + i + '" ' +
                 'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
               '<button type="button" class="schedule-icon-btn danger" data-act="schedule-delete" data-idx="' + i + '" ' +
                 'aria-label="Delete row ' + (i + 1) + '" title="Delete task"><i data-lucide="trash-2"></i></button>' +
+              '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
+                'data-act="schedule-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
+                'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
+              '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
+                'data-act="schedule-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
+                'title="Done on time"><i data-lucide="check"></i></button>' +
             "</div>" : "") +
           "</div>" +
           (scheduleInsertAfter === i ? scheduleInsertFormHtml(i) : "") +
