@@ -327,6 +327,7 @@
   .schedule-dur .sep { opacity: 0.5; }
   .schedule-dur .live.over { color: var(--danger); }
   .schedule-dur .live.under { color: var(--good); }
+  .schedule-dur-group { display: flex; align-items: center; gap: 0.3rem; flex: 0 0 auto; }
   /* per-row insert/delete icons — only shown once a row has content, so an
      unused blank slot still looks exactly like before */
   .schedule-row-actions { display: flex; gap: 0.3rem; flex: 0 0 auto; }
@@ -2344,6 +2345,21 @@
     }
     return '<div class="schedule-dur">' + html + "</div>";
   }
+  // wraps the duration box with a small reset icon that only appears when
+  // Plan and Actual disagree — for when the gap changed because you
+  // deliberately replanned it (not because the task actually ran long), and
+  // want Plan to just adopt the current Actual instead of staying "wrong"
+  function scheduleDurGroupHtml(row, i, liveMin) {
+    var durHtml = scheduleDurHtml(row, liveMin);
+    if (!durHtml) return "";
+    var mismatch = row.plannedMin != null && liveMin != null && liveMin !== row.plannedMin;
+    var reset = mismatch
+      ? '<button type="button" class="schedule-icon-btn" data-act="schedule-reset-plan" data-idx="' + i + '" ' +
+          'aria-label="Reset planned duration to match actual" ' +
+          'title="Just replanning, not an overrun? Reset Plan to match Actual"><i data-lucide="rotate-ccw"></i></button>'
+      : "";
+    return '<div class="schedule-dur-group">' + durHtml + reset + "</div>";
+  }
   // the small "insert a task after this row" form: time (prefilled with
   // whatever's about to be displaced), duration (required — there's no
   // "next row" to measure a gap from yet, since inserting means carving out
@@ -2369,7 +2385,7 @@
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Each row also shows <b>Plan</b> (the gap you first set to the next task) → <b>Actual</b> (what it’s turned into since) — push the next task later and Actual turns red, pull it earlier and it turns green. On a filled-in row, <i data-lucide="plus"></i> inserts a new task after it (with its own duration, pushing everything later) and <i data-lucide="trash-2"></i> deletes it (pulling everything after it earlier to close the gap).</p>' +
+      '<p class="goals-intro">Lay out your day, one row per step. Change a row’s time and every row below it shifts by the same amount — so running long on one task doesn’t mean retyping the rest. Each row also shows <b>Plan</b> (the gap you first set to the next task) → <b>Actual</b> (what it’s turned into since) — push the next task later and Actual turns red, pull it earlier and it turns green. If that was a deliberate replan rather than an overrun, a <i data-lucide="rotate-ccw"></i> appears next to it to reset Plan to match. On a filled-in row, <i data-lucide="plus"></i> inserts a new task after it (with its own duration, pushing everything later) and <i data-lucide="trash-2"></i> deletes it (pulling everything after it earlier to close the gap).</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
@@ -2383,7 +2399,7 @@
               'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
             '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
               'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
-            scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
+            scheduleDurGroupHtml(row, i, scheduleLiveDurationMin(state.schedule, i)) +
             (used ? '<div class="schedule-row-actions">' +
               '<button type="button" class="schedule-icon-btn" data-act="schedule-insert" data-idx="' + i + '" ' +
                 'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
@@ -2976,11 +2992,20 @@
       var row = state.schedule[i];
       var timeInp = rowEl.querySelector(".schedule-time");
       if (timeInp !== el) timeInp.value = row.time;
-      var durEl = rowEl.querySelector(".schedule-dur");
-      var html = scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i));
-      if (durEl) { if (html) durEl.outerHTML = html; else durEl.remove(); }
-      else if (html) rowEl.insertAdjacentHTML("beforeend", html);
+      var groupEl = rowEl.querySelector(".schedule-dur-group");
+      var html = scheduleDurGroupHtml(row, i, scheduleLiveDurationMin(state.schedule, i));
+      if (groupEl) {
+        if (html) groupEl.outerHTML = html; else groupEl.remove();
+      } else if (html) {
+        // the duration group sits before the insert/delete/done icons, so a
+        // freshly-computable one (e.g. the next row just got its first time)
+        // has to land before those, not just get appended after them
+        var actionsEl = rowEl.querySelector(".schedule-row-actions");
+        if (actionsEl) actionsEl.insertAdjacentHTML("beforebegin", html);
+        else rowEl.insertAdjacentHTML("beforeend", html);
+      }
     });
+    if (window.lucide) lucide.createIcons();
   }
   function updateScheduleText(idx, value) {
     var now = new Date().toISOString();
@@ -3090,6 +3115,19 @@
       return s;
     });
     if (next === "yes") playDoneChime();
+  }
+  // "that gap changed because I deliberately replanned it, not because the
+  // task overran" — re-freezes this row's Plan to whatever Actual currently
+  // reads, clearing the over/under mismatch without touching anything else
+  function resetSchedulePlan(idx) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.schedule.slice();
+      var live = scheduleLiveDurationMin(rows, idx);
+      if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
+      s.schedule = rows;
+      return s;
+    });
   }
 
   function endEntryNow(id) {
@@ -3833,6 +3871,8 @@
     if (doneYesBtn) { setScheduleDone(+doneYesBtn.dataset.idx, "yes"); return; }
     var doneNoBtn = ev.target.closest('[data-act="schedule-done-no"]');
     if (doneNoBtn) { setScheduleDone(+doneNoBtn.dataset.idx, "no"); return; }
+    var resetPlanBtn = ev.target.closest('[data-act="schedule-reset-plan"]');
+    if (resetPlanBtn) { resetSchedulePlan(+resetPlanBtn.dataset.idx); return; }
     var insBtn = ev.target.closest('[data-act="schedule-insert"]');
     if (insBtn) { scheduleInsertAfter = +insBtn.dataset.idx; render(); return; }
     var cancelBtn = ev.target.closest('[data-act="schedule-insert-cancel"]');
