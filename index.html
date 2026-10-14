@@ -328,6 +328,7 @@
   .schedule-dur .live.over { color: var(--danger); }
   .schedule-dur .live.under { color: var(--good); }
   .schedule-dur-group { display: flex; align-items: center; gap: 0.3rem; flex: 0 0 auto; }
+  .schedule-icon-btn.muted { opacity: 0.35; }
   /* per-row insert/delete icons — only shown once a row has content, so an
      unused blank slot still looks exactly like before */
   .schedule-row-actions { display: flex; gap: 0.3rem; flex: 0 0 auto; }
@@ -2345,19 +2346,22 @@
     }
     return '<div class="schedule-dur">' + html + "</div>";
   }
-  // wraps the duration box with a small reset icon that only appears when
-  // Plan and Actual disagree — for when the gap changed because you
-  // deliberately replanned it (not because the task actually ran long), and
-  // want Plan to just adopt the current Actual instead of staying "wrong"
+  // wraps the duration box with a reset icon — present on every row that
+  // shows a full Plan → Actual pair (so the row line-up stays consistent
+  // instead of one row having an extra icon other rows lack), just dimmed
+  // when there's nothing to fix and full-strength when they disagree — for
+  // when the gap changed because you deliberately replanned it (not because
+  // the task actually ran long), and want Plan to just adopt Actual
   function scheduleDurGroupHtml(row, i, liveMin) {
     var durHtml = scheduleDurHtml(row, liveMin);
     if (!durHtml) return "";
-    var mismatch = row.plannedMin != null && liveMin != null && liveMin !== row.plannedMin;
-    var reset = mismatch
-      ? '<button type="button" class="schedule-icon-btn" data-act="schedule-reset-plan" data-idx="' + i + '" ' +
-          'aria-label="Reset planned duration to match actual" ' +
-          'title="Just replanning, not an overrun? Reset Plan to match Actual"><i data-lucide="rotate-ccw"></i></button>'
-      : "";
+    var reset = "";
+    if (liveMin != null) {
+      var mismatch = row.plannedMin != null && liveMin !== row.plannedMin;
+      reset = '<button type="button" class="schedule-icon-btn' + (mismatch ? "" : " muted") + '" data-act="schedule-reset-plan" data-idx="' + i + '" ' +
+        'aria-label="Reset planned duration to match actual" ' +
+        'title="Just replanning, not an overrun? Reset Plan to match Actual"><i data-lucide="rotate-ccw"></i></button>';
+    }
     return '<div class="schedule-dur-group">' + durHtml + reset + "</div>";
   }
   // the small "insert a task after this row" form: time (prefilled with
