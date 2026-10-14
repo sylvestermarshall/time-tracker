@@ -339,6 +339,10 @@
   .schedule-icon-btn svg { width: 0.85rem; height: 0.85rem; }
   .schedule-icon-btn:active { border-color: var(--accent); color: var(--accent); }
   .schedule-icon-btn.danger:active { border-color: var(--danger); color: var(--danger); }
+  /* done-on-time check / didn't-get-to-it cross — same active-state look as
+     the ABC page's done toggle, just as small framed icon buttons here */
+  .schedule-icon-btn.check.active { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+  .schedule-icon-btn.cross.active { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
   /* the "insert a task after this row" mini-form */
   .schedule-insert-form {
     display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
@@ -971,7 +975,7 @@
   // plain per-index "later updatedAt wins" rather than a union
   function emptySchedule() {
     var out = [];
-    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() });
+    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() });
     return out;
   }
   function normalizeSchedule(raw) {
@@ -988,6 +992,9 @@
         // time it becomes computable and re-frozen only when this row's own
         // time is directly retyped — see updateScheduleTime
         plannedMin: planned,
+        // did you actually finish it on time? "" (unmarked), "yes", or "no" —
+        // same shape as abcNotes' done field
+        done: r && (r.done === "yes" || r.done === "no") ? r.done : "",
         updatedAt: r && r.updatedAt && !isNaN(new Date(r.updatedAt)) ? new Date(r.updatedAt).toISOString() : new Date(0).toISOString()
       });
     }
@@ -997,8 +1004,8 @@
     a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
     var out = [];
     for (var i = 0; i < SCHEDULE_SIZE; i++) {
-      var ra = a[i] || { time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() };
-      var rb = b[i] || { time: "", text: "", plannedMin: null, updatedAt: new Date(0).toISOString() };
+      var ra = a[i] || { time: "", text: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
+      var rb = b[i] || { time: "", text: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
       out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
     }
     return out;
@@ -2378,6 +2385,12 @@
               'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
             scheduleDurHtml(row, scheduleLiveDurationMin(state.schedule, i)) +
             (used ? '<div class="schedule-row-actions">' +
+              '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
+                'data-act="schedule-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
+                'title="Done on time"><i data-lucide="check"></i></button>' +
+              '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
+                'data-act="schedule-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
+                'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
               '<button type="button" class="schedule-icon-btn" data-act="schedule-insert" data-idx="' + i + '" ' +
                 'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
               '<button type="button" class="schedule-icon-btn danger" data-act="schedule-delete" data-idx="' + i + '" ' +
@@ -3035,10 +3048,48 @@
           }
         }
       }
-      rows[rows.length - 1] = { time: "", text: "", plannedMin: null, updatedAt: now };
+      rows[rows.length - 1] = { time: "", text: "", plannedMin: null, done: "", updatedAt: now };
       s.schedule = rows;
       return s;
     });
+  }
+  // a short, deliberately upbeat two-note chime for marking a task done on
+  // time — synthesized rather than an audio file, to keep this a single
+  // self-contained HTML file with no assets to fetch or ship
+  var scheduleAudioCtx = null;
+  function playDoneChime() {
+    try {
+      if (!scheduleAudioCtx) scheduleAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (scheduleAudioCtx.state === "suspended") scheduleAudioCtx.resume();
+      var ctx = scheduleAudioCtx, now = ctx.currentTime;
+      [[880, now, 0.14], [1318.5, now + 0.09, 0.22]].forEach(function (n) {
+        var osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = n[0];
+        gain.gain.setValueAtTime(0, n[1]);
+        gain.gain.linearRampToValueAtTime(0.25, n[1] + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, n[1] + n[2]);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(n[1]);
+        osc.stop(n[1] + n[2] + 0.02);
+      });
+    } catch (e) {}
+  }
+  // tapping the already-active choice clears it back to unmarked, same as
+  // the ABC page's done toggle; the chime only plays when the result of the
+  // tap is actually "yes" (not when un-marking, and not for "no")
+  function setScheduleDone(idx, val) {
+    var cur = (state.schedule[idx] || {}).done || "";
+    var next = cur === val ? "" : val;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.schedule.slice();
+      rows[idx] = Object.assign({}, rows[idx], { done: next, updatedAt: now });
+      s.schedule = rows;
+      return s;
+    });
+    if (next === "yes") playDoneChime();
   }
 
   function endEntryNow(id) {
@@ -3778,6 +3829,10 @@
       resetSchedule();
       return;
     }
+    var doneYesBtn = ev.target.closest('[data-act="schedule-done-yes"]');
+    if (doneYesBtn) { setScheduleDone(+doneYesBtn.dataset.idx, "yes"); return; }
+    var doneNoBtn = ev.target.closest('[data-act="schedule-done-no"]');
+    if (doneNoBtn) { setScheduleDone(+doneNoBtn.dataset.idx, "no"); return; }
     var insBtn = ev.target.closest('[data-act="schedule-insert"]');
     if (insBtn) { scheduleInsertAfter = +insBtn.dataset.idx; render(); return; }
     var cancelBtn = ev.target.closest('[data-act="schedule-insert-cancel"]');
