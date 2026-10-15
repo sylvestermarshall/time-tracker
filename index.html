@@ -2649,7 +2649,7 @@
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with today’s date and however long it actually took, same as typing it into Home.</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
@@ -3517,14 +3517,42 @@
       return s;
     });
   }
+  // marking a row done on time also logs it into your real tracked entries —
+  // same as typing it into the Home form — with today's date, its own start
+  // time, and an end time from however long it actually took (its live gap
+  // if computable, else its frozen Plan), so it shows up in Overview/reports
+  // exactly like anything logged normally. Un-marking, or marking "no", never
+  // logs anything.
   function setScheduleBetaDone(idx, val) {
     var cur = (state.scheduleBeta[idx] || {}).done || "";
     var next = cur === val ? "" : val;
     var now = new Date().toISOString();
+    var row = state.scheduleBeta[idx];
+    var shouldLog = val === "yes" && next === "yes" && !!(row && row.time);
+    var endHHMM = "";
+    if (shouldLog) {
+      var liveMin = scheduleLiveDurationMin(state.scheduleBeta, idx);
+      var durMin = liveMin != null ? liveMin : row.plannedMin;
+      if (durMin) endHHMM = minutesToHHMM(hhmmToMinutes(row.time) + durMin);
+    }
     queueMutation(function (s) {
       var rows = s.scheduleBeta.slice();
       rows[idx] = Object.assign({}, rows[idx], { done: next, updatedAt: now });
       s.scheduleBeta = rows;
+      if (shouldLog) {
+        var startAt = makeStartAt(todayKey(), row.time);
+        var endAt = endHHMM ? makeEndAt(startAt, endHHMM) : "";
+        var cat = row.category ? (findCaseInsensitive(s.categories, row.category) || row.category) : "";
+        var tsk = row.text ? (findCaseInsensitive(knownTaskNames(s), row.text) || row.text) : "";
+        s.entries.push({
+          id: uid(), startAt: startAt, endAt: endAt,
+          concurrent: false, task: tsk, category: cat, stop: false,
+          createdAt: now, updatedAt: now
+        });
+        if (cat && s.categories.indexOf(cat) < 0) s.categories.push(cat);
+        reviveChipHidden(s, "categories", cat);
+        reviveChipHidden(s, "tasks", tsk);
+      }
       return s;
     });
     if (next === "yes") playDoneChime();
