@@ -357,13 +357,29 @@
   .schedule-insert-form .schedule-ins-cat { flex: 0 0 8rem; width: 8rem; }
   .schedule-insert-actions { display: flex; gap: 0.5rem; flex: 1 1 100%; justify-content: flex-end; }
 
-  /* ---------- schedule beta page: adds a category tag to the schedule row
-     pattern above; everything else (row/dur/icon styles) is shared ---------- */
+  /* ---------- schedule beta page: a tappable row summary that expands into
+     the full home-style log form in place (time/task/category + chips +
+     autocomplete) — everything else (dur/icon styles) is shared with
+     Schedule above ---------- */
   .schedulebeta-cat {
     flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: var(--ink-faint);
     background: var(--line-soft); border-radius: var(--radius-pill);
     padding: 0.3rem 0.6rem; white-space: nowrap;
   }
+  .schedulebeta-summary {
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    padding: 0.6rem 0.75rem; border-radius: var(--radius-control);
+    background: var(--surface); box-shadow: var(--shadow-soft); cursor: pointer;
+  }
+  .schedulebeta-summary.empty { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
+  .schedulebeta-summary-time {
+    flex: 0 0 4.4rem; width: 4.4rem; text-align: center;
+    font-family: "JetBrains Mono", monospace; letter-spacing: 0.05em; color: var(--ink);
+  }
+  .schedulebeta-summary.empty .schedulebeta-summary-time { color: var(--ink-faint); }
+  .schedulebeta-summary-text { flex: 1 1 8rem; min-width: 6rem; color: var(--ink); }
+  .schedulebeta-summary.empty .schedulebeta-summary-text { color: var(--ink-faint); font-style: italic; }
+  .schedulebeta-edit { margin-bottom: 0; }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -815,10 +831,13 @@
   // schedule route: index of the row whose "insert a task after this one"
   // mini-form is currently open, or -1 if none is
   var scheduleInsertAfter = -1;
-  // same idea, for the Schedule Beta trial page's own insert form
+  // same idea, for Schedule Beta's own mid-list insert form
   var scheduleBetaInsertAfter = -1;
-  // "1 min ago" step counter for Schedule Beta's add-form time field, same
-  // cycling behavior as the home log form's agoN
+  // index of the Schedule Beta row currently expanded for editing (tap a row
+  // to open it, like a Home timeline entry), or -1 if none is
+  var scheduleBetaExpandedIdx = -1;
+  // "1 min ago" step counter for whichever Schedule Beta row's edit form is
+  // open, same cycling behavior as the home log form's agoN
   var scheduleBetaAgoN = 0;
 
   // ---------- helpers ----------
@@ -2535,142 +2554,94 @@
       "</div>" +
     "</div>";
   }
-  // quick-pick chips for the Schedule Beta add form — same source data
-  // (taskCatalog/categories/chipOrder/chipHidden) as the real log form on
-  // Home, read-only here; this page never writes to any of them
-  function renderScheduleBetaChips() {
+  // the expanded per-row edit form — same fields/behavior as the home log
+  // form (time + Now/ago, task + chips + autocomplete, category + chips +
+  // autocomplete), just opened by tapping the row itself instead of living
+  // in a fixed panel; mirrors how a Home timeline entry expands in place
+  function scheduleBetaEditFormHtml(row, i) {
+    return '<div class="schedule-row-wrap">' +
+      '<div class="panel schedulebeta-edit" data-idx="' + i + '">' +
+        '<div class="field">' +
+          '<label class="lbl"><i data-lucide="clock"></i>Start time</label>' +
+          '<div class="time-wrap">' +
+            '<input type="text" class="time-in sbe-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+              'placeholder="0930" aria-label="Start time, 24-hour, type four digits" value="' + escapeHtml(row.time) + '">' +
+            '<button type="button" class="btn btn-ghost btn-small" data-act="sbe-now">Now</button>' +
+            '<button type="button" class="btn btn-ghost btn-small" data-act="sbe-ago" title="Tap to step back a minute at a time">1 min ago</button>' +
+          "</div>" +
+        "</div>" +
+        '<div class="field">' +
+          '<label class="lbl"><i data-lucide="zap"></i>Tasks</label>' +
+          '<div class="chip-row sbe-task-chips"></div>' +
+          '<div class="input-clear-wrap">' +
+            '<input type="text" class="sbe-task" placeholder="e.g. Reviewed pull requests" value="' + escapeHtml(row.text) + '" ' +
+              'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+            '<button type="button" class="field-clear" data-act="sbe-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>' +
+          "</div>" +
+          '<div class="ac-list sbe-task-ac" hidden></div>' +
+        "</div>" +
+        '<div class="field">' +
+          '<label class="lbl"><i data-lucide="layout-grid"></i>Category</label>' +
+          '<div class="chip-row sbe-category-chips"></div>' +
+          '<div class="input-clear-wrap">' +
+            '<input type="text" class="sbe-category" placeholder="e.g. Work" value="' + escapeHtml(row.category) + '" ' +
+              'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+            '<button type="button" class="field-clear" data-act="sbe-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>' +
+          "</div>" +
+          '<div class="ac-list sbe-category-ac" hidden></div>' +
+        "</div>" +
+        '<div class="form-actions">' +
+          '<button type="button" class="btn btn-ghost" data-act="sbe-cancel">Cancel</button>' +
+          '<button type="button" class="btn btn-primary" data-act="sbe-save" data-idx="' + i + '"><i data-lucide="check"></i>Save</button>' +
+        "</div>" +
+      "</div>" +
+    "</div>";
+  }
+  // quick-pick chips for whichever row's edit form is currently open — same
+  // source data (taskCatalog/categories/chipOrder/chipHidden) as the real
+  // log form on Home, read-only here; this page never writes to any of them
+  function renderScheduleBetaEditChips(editBox) {
     var taskNames = orderedNames(visibleNames("tasks", allTaskNames()), state.chipOrder.tasks, taskCounts());
     var catNames = orderedNames(visibleNames("categories", manageableCategories()), state.chipOrder.categories, categoryCounts());
-    document.getElementById("sb-task-chips").innerHTML = taskNames.map(function (t) {
+    editBox.querySelector(".sbe-task-chips").innerHTML = taskNames.map(function (t) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
     }).join("");
-    document.getElementById("sb-category-chips").innerHTML = catNames.map(function (c) {
+    editBox.querySelector(".sbe-category-chips").innerHTML = catNames.map(function (c) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
     }).join("");
   }
-  // wires the add form's Now/ago buttons, chips, and task/category
-  // autocomplete — called fresh after every render since the form's DOM is
-  // rebuilt from scratch each time (this page has no persistent static HTML
-  // like the real add form does)
-  function wireScheduleBetaForm() {
-    var timeEl = document.getElementById("sb-time");
-    var taskEl = document.getElementById("sb-task");
-    var catEl = document.getElementById("sb-category");
-
-    attachTimeInput(timeEl);
-    document.getElementById("sb-now-btn").addEventListener("click", function () {
-      timeEl.value = nowHHMM();
-      scheduleBetaAgoN = 0;
-      document.getElementById("sb-ago-btn").textContent = "1 min ago";
-    });
-    document.getElementById("sb-ago-btn").addEventListener("click", function () {
-      scheduleBetaAgoN = (scheduleBetaAgoN % 3) + 1;
-      timeEl.value = hhmmMinsAgo(scheduleBetaAgoN);
-      this.textContent = scheduleBetaAgoN + " min ago";
-    });
-
-    document.getElementById("sb-task-clear").addEventListener("click", function () { taskEl.value = ""; taskEl.focus(); });
-    document.getElementById("sb-category-clear").addEventListener("click", function () { catEl.value = ""; catEl.focus(); });
-
-    var hideCatAc = wireCategoryAc(catEl, document.getElementById("sb-category-ac"), function (name) {
-      catEl.value = name; hideCatAc(); catEl.blur();
-    });
-    var hideTaskAc = wireTaskAc(taskEl, document.getElementById("sb-task-ac"), function (name, cat) {
-      taskEl.value = name; hideTaskAc();
-      if (cat) { catEl.value = cat; taskEl.blur(); } else catEl.focus();
-    }, function () { catEl.focus(); });
-
-    document.getElementById("sb-task-chips").addEventListener("click", function (ev) {
-      var chip = ev.target.closest(".chip");
-      if (!chip) return;
-      taskEl.value = chip.dataset.name;
-      var cat = state.taskCatalog[chip.dataset.name];
+  // same pattern as the home timeline's attachEditAc — wires suggestions
+  // fresh onto an edit box's task/category fields each time it's opened
+  function attachScheduleBetaEditAc(editBox) {
+    var taskEl = editBox.querySelector(".sbe-task");
+    var catEl = editBox.querySelector(".sbe-category");
+    wireCategoryAc(catEl, editBox.querySelector(".sbe-category-ac"), function (name) { catEl.value = name; });
+    wireTaskAc(taskEl, editBox.querySelector(".sbe-task-ac"), function (name, cat) {
+      taskEl.value = name;
       if (cat) catEl.value = cat;
-    });
-    document.getElementById("sb-category-chips").addEventListener("click", function (ev) {
-      var chip = ev.target.closest(".chip");
-      if (chip) catEl.value = chip.dataset.name;
-    });
-
-    document.getElementById("sb-add-btn").addEventListener("click", function () {
-      var t = timeEl.value.trim() ? normTime(timeEl.value) : nowHHMM();
-      if (!t) { timeEl.value = ""; timeEl.focus(); return; }
-      if (!taskEl.value.trim()) { taskEl.focus(); return; }
-      if (scheduleBetaIsFull()) { alert("Schedule Beta is full (30 rows) — delete or finish a task first."); return; }
-      var text = taskEl.value, category = catEl.value;
-      // clear the form before mutating — queueMutation renders synchronously
-      // and the next render preserves whatever's currently in these fields,
-      // so this has to happen first or the just-added values reappear
-      taskEl.value = ""; catEl.value = ""; timeEl.value = nowHHMM();
-      scheduleBetaAgoN = 0;
-      addScheduleBetaEntry(t, text, category);
-    });
-
-    renderScheduleBetaChips();
+    }, function () { catEl.focus(); });
   }
   function renderScheduleBetaPage() {
     document.getElementById("pageTitle").textContent = "Schedule Beta";
     var box = document.getElementById("scheduleBetaList");
-    // this page fully rebuilds on every mutation (including ones triggered by
-    // tapping a row elsewhere, e.g. a done check) — preserve whatever's
-    // mid-typed in the add form across that, or a stray tap elsewhere would
-    // silently wipe it
-    var prevTimeEl = document.getElementById("sb-time");
-    var prevTaskEl = document.getElementById("sb-task");
-    var prevCatEl = document.getElementById("sb-category");
-    var keepTime = prevTimeEl ? prevTimeEl.value : "";
-    var keepTask = prevTaskEl ? prevTaskEl.value : "";
-    var keepCat = prevCatEl ? prevCatEl.value : "";
-
     box.innerHTML =
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">A trial: log tasks the same way you do on Home — time, task, category, with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
-      '<div class="panel" id="sbAddPanel">' +
-        '<div class="field">' +
-          '<label class="lbl" for="sb-time"><i data-lucide="clock"></i>Start time</label>' +
-          '<div class="time-wrap">' +
-            '<input type="text" id="sb-time" class="time-in" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="0930" aria-label="Start time, 24-hour, type four digits">' +
-            '<button type="button" class="btn btn-ghost btn-small" id="sb-now-btn">Now</button>' +
-            '<button type="button" class="btn btn-ghost btn-small" id="sb-ago-btn" title="Tap to step back a minute at a time">1 min ago</button>' +
-          "</div>" +
-        "</div>" +
-        '<div class="field">' +
-          '<label class="lbl" for="sb-task"><i data-lucide="zap"></i>Tasks</label>' +
-          '<div class="chip-row" id="sb-task-chips"></div>' +
-          '<div class="input-clear-wrap">' +
-            '<input type="text" id="sb-task" placeholder="e.g. Reviewed pull requests" role="combobox" aria-autocomplete="list" aria-expanded="false">' +
-            '<button type="button" class="field-clear" id="sb-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>' +
-          "</div>" +
-          '<div class="ac-list" id="sb-task-ac" hidden></div>' +
-        "</div>" +
-        '<div class="field">' +
-          '<label class="lbl" for="sb-category"><i data-lucide="layout-grid"></i>Category</label>' +
-          '<div class="chip-row" id="sb-category-chips"></div>' +
-          '<div class="input-clear-wrap">' +
-            '<input type="text" id="sb-category" placeholder="e.g. Work" role="combobox" aria-autocomplete="list" aria-expanded="false">' +
-            '<button type="button" class="field-clear" id="sb-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>' +
-          "</div>" +
-          '<div class="ac-list" id="sb-category-ac" hidden></div>' +
-        "</div>" +
-        '<div class="form-actions">' +
-          '<button type="button" class="btn btn-primary" id="sb-add-btn"><i data-lucide="calendar-plus"></i>Add to schedule</button>' +
-        "</div>" +
-      "</div>" +
-      '<div class="schedule-head" style="margin-top:1.2rem;">' +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
+      '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
       "</div>" +
       '<div class="schedule-rows">' +
       state.scheduleBeta.map(function (row, i) {
+        if (scheduleBetaExpandedIdx === i) return scheduleBetaEditFormHtml(row, i);
         var used = !!(row.time || row.text);
         return '<div class="schedule-row-wrap">' +
-          '<div class="schedule-row">' +
-            '<input type="text" class="time-in schedule-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
-              'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
-            '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
-              'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
+          '<div class="schedulebeta-summary' + (used ? "" : " empty") + '" data-idx="' + i + '" role="button" tabindex="0" ' +
+            'aria-label="Row ' + (i + 1) + (used ? ", edit" : ", tap to add a task") + '">' +
+            '<span class="schedulebeta-summary-time">' + (row.time ? escapeHtml(row.time) : "--:--") + "</span>" +
+            '<span class="schedulebeta-summary-text">' + (row.text ? escapeHtml(row.text) : "Tap to add a task") + "</span>" +
             (row.category ? '<span class="schedulebeta-cat">' + escapeHtml(row.category) + "</span>" : "") +
             scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(state.scheduleBeta, i)) +
             (used ? '<div class="schedule-row-actions">' +
@@ -2691,18 +2662,18 @@
       }).join("") +
       "</div>";
 
-    box.querySelectorAll(".schedule-time").forEach(attachTimeInput);
+    var editBox = box.querySelector(".schedulebeta-edit");
+    if (editBox) {
+      attachTimeInput(editBox.querySelector(".sbe-time"));
+      attachScheduleBetaEditAc(editBox);
+      renderScheduleBetaEditChips(editBox);
+    }
     var insTimeEl = box.querySelector(".schedule-ins-time");
     if (insTimeEl) {
       attachTimeInput(insTimeEl);
       var insDurEl = box.querySelector(".schedule-ins-dur");
       if (insDurEl) insDurEl.focus();
     }
-
-    document.getElementById("sb-time").value = keepTime || nowHHMM();
-    document.getElementById("sb-task").value = keepTask;
-    document.getElementById("sb-category").value = keepCat;
-    wireScheduleBetaForm();
   }
 
   // ---------- overview page ----------
@@ -3414,20 +3385,33 @@
     var last = state.scheduleBeta[state.scheduleBeta.length - 1];
     return !!(last.time || last.text);
   }
-  // the add form's "Add to schedule" — writes into the first still-blank
-  // slot (so entries land in the order you add them, like Home's log form),
-  // then backfills the previous row's Plan the same way a blank Schedule row
-  // getting its first time does, if it's now computable
-  function addScheduleBetaEntry(t, text, category) {
+  // commits a row's edit-form submission (Save) — handles both filling in a
+  // previously-blank row and editing an existing one identically, same as
+  // updateScheduleTime does for the real Schedule page's bare inputs: if the
+  // row had no time before, nothing cascades (you're just filling it in);
+  // if it did, every later row with a time shifts by the same delta. Also
+  // carries the same Plan freeze/backfill rule as updateScheduleTime.
+  function saveScheduleBetaRow(idx, t, text, category) {
+    var before = (state.scheduleBeta[idx] || {}).time || "";
     var now = new Date().toISOString();
     queueMutation(function (s) {
       var rows = s.scheduleBeta.slice();
-      var idx = -1;
-      for (var i = 0; i < rows.length; i++) { if (!rows[i].time && !rows[i].text) { idx = i; break; } }
-      if (idx === -1) return s;
-      rows[idx] = { time: t, text: text || "", category: category || "", plannedMin: null, done: "", updatedAt: now };
-      if (idx > 0 && rows[idx - 1].plannedMin == null && rows[idx - 1].time && rows[idx].time) {
-        rows[idx - 1] = Object.assign({}, rows[idx - 1], { plannedMin: scheduleLiveDurationMin(rows, idx - 1), updatedAt: now });
+      rows[idx] = Object.assign({}, rows[idx], { time: t, text: text || "", category: category || "", updatedAt: now });
+      if (before && t) {
+        var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
+        if (delta) {
+          for (var i = idx + 1; i < rows.length; i++) {
+            if (rows[i] && rows[i].time) {
+              rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
+            }
+          }
+        }
+      }
+      rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
+      for (var j = 0; j < rows.length - 1; j++) {
+        if (rows[j].plannedMin == null && rows[j].time && rows[j + 1].time) {
+          rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
+        }
       }
       s.scheduleBeta = rows;
       return s;
@@ -3500,67 +3484,6 @@
       return s;
     });
   }
-  // row time/text edits use the quiet mutation + a DOM patch scoped to
-  // #scheduleBetaList (never document-wide — this page's rows share class
-  // names with the real Schedule page's rows, and both can be in the DOM
-  // at once since routes just toggle `hidden`), same reasoning as
-  // updateScheduleTime: a full render() here would destroy whatever row
-  // field the next tap is landing on, mid-gesture
-  function updateScheduleBetaTime(idx, rawValue, el) {
-    var t = normTime(rawValue);
-    el.value = t;
-    var before = (state.scheduleBeta[idx] || {}).time || "";
-    if (t === before) return;
-    var now = new Date().toISOString();
-    queueMutationQuiet(function (s) {
-      var rows = s.scheduleBeta.slice();
-      rows[idx] = Object.assign({}, rows[idx], { time: t, updatedAt: now });
-      if (before && t) {
-        var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
-        if (delta) {
-          for (var i = idx + 1; i < rows.length; i++) {
-            if (rows[i] && rows[i].time) {
-              rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
-            }
-          }
-        }
-      }
-      rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
-      for (var j = 0; j < rows.length - 1; j++) {
-        if (rows[j].plannedMin == null && rows[j].time && rows[j + 1].time) {
-          rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
-        }
-      }
-      s.scheduleBeta = rows;
-      return s;
-    });
-    var box = document.getElementById("scheduleBetaList");
-    box.querySelectorAll(".schedule-row").forEach(function (rowEl, i) {
-      var row = state.scheduleBeta[i];
-      var timeInp = rowEl.querySelector(".schedule-time");
-      if (timeInp !== el) timeInp.value = row.time;
-      var groupEl = rowEl.querySelector(".schedule-dur-group");
-      var html = scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(state.scheduleBeta, i));
-      if (groupEl) {
-        if (html) groupEl.outerHTML = html; else groupEl.remove();
-      } else if (html) {
-        var actionsEl = rowEl.querySelector(".schedule-row-actions");
-        if (actionsEl) actionsEl.insertAdjacentHTML("beforebegin", html);
-        else rowEl.insertAdjacentHTML("beforeend", html);
-      }
-    });
-    if (window.lucide) lucide.createIcons();
-  }
-  function updateScheduleBetaText(idx, value) {
-    var now = new Date().toISOString();
-    queueMutationQuiet(function (s) {
-      var rows = s.scheduleBeta.slice();
-      rows[idx] = Object.assign({}, rows[idx], { text: value, updatedAt: now });
-      s.scheduleBeta = rows;
-      return s;
-    });
-  }
-
   function endEntryNow(id) {
     var iso = new Date().toISOString();
     queueMutation(function (s) {
@@ -4373,13 +4296,69 @@
     var delBtn = ev.target.closest('[data-act="schedulebeta-delete"]');
     if (delBtn && confirm("Delete this task? Everything after it moves up to close the gap.")) {
       deleteScheduleBetaTask(+delBtn.dataset.idx);
+      return;
     }
-  });
-  scheduleBetaList.addEventListener("change", function (ev) {
-    var timeEl = ev.target.closest(".schedule-time");
-    if (timeEl) { updateScheduleBetaTime(+timeEl.dataset.idx, timeEl.value, timeEl); return; }
-    var textEl = ev.target.closest(".schedule-text");
-    if (textEl) { updateScheduleBetaText(+textEl.dataset.idx, textEl.value); return; }
+
+    // ---- the per-row expand-to-edit form ----
+    var sbeNow = ev.target.closest('[data-act="sbe-now"]');
+    if (sbeNow) {
+      var nowBox = sbeNow.closest(".schedulebeta-edit");
+      nowBox.querySelector(".sbe-time").value = nowHHMM();
+      scheduleBetaAgoN = 0;
+      nowBox.querySelector('[data-act="sbe-ago"]').textContent = "1 min ago";
+      return;
+    }
+    var sbeAgo = ev.target.closest('[data-act="sbe-ago"]');
+    if (sbeAgo) {
+      scheduleBetaAgoN = (scheduleBetaAgoN % 3) + 1;
+      sbeAgo.closest(".schedulebeta-edit").querySelector(".sbe-time").value = hhmmMinsAgo(scheduleBetaAgoN);
+      sbeAgo.textContent = scheduleBetaAgoN + " min ago";
+      return;
+    }
+    var sbeTaskClear = ev.target.closest('[data-act="sbe-task-clear"]');
+    if (sbeTaskClear) {
+      var te = sbeTaskClear.closest(".schedulebeta-edit").querySelector(".sbe-task");
+      te.value = ""; te.focus();
+      return;
+    }
+    var sbeCatClear = ev.target.closest('[data-act="sbe-category-clear"]');
+    if (sbeCatClear) {
+      var ce = sbeCatClear.closest(".schedulebeta-edit").querySelector(".sbe-category");
+      ce.value = ""; ce.focus();
+      return;
+    }
+    var sbeChip = ev.target.closest(".schedulebeta-edit .chip");
+    if (sbeChip) {
+      var editBox2 = sbeChip.closest(".schedulebeta-edit");
+      if (sbeChip.closest(".sbe-task-chips")) {
+        editBox2.querySelector(".sbe-task").value = sbeChip.dataset.name;
+        var cat = state.taskCatalog[sbeChip.dataset.name];
+        if (cat) editBox2.querySelector(".sbe-category").value = cat;
+      } else {
+        editBox2.querySelector(".sbe-category").value = sbeChip.dataset.name;
+      }
+      return;
+    }
+    var sbeCancel = ev.target.closest('[data-act="sbe-cancel"]');
+    if (sbeCancel) { scheduleBetaExpandedIdx = -1; render(); return; }
+    var sbeSave = ev.target.closest('[data-act="sbe-save"]');
+    if (sbeSave) {
+      var editBox3 = sbeSave.closest(".schedulebeta-edit");
+      var timeEl3 = editBox3.querySelector(".sbe-time");
+      var taskEl3 = editBox3.querySelector(".sbe-task");
+      var catEl3 = editBox3.querySelector(".sbe-category");
+      var t3 = timeEl3.value.trim() ? normTime(timeEl3.value) : "";
+      if (!t3) { timeEl3.focus(); return; }
+      if (!taskEl3.value.trim()) { taskEl3.focus(); return; }
+      var idx3 = +sbeSave.dataset.idx;
+      scheduleBetaExpandedIdx = -1;
+      saveScheduleBetaRow(idx3, t3, taskEl3.value, catEl3.value);
+      return;
+    }
+
+    // tapping the row itself (not one of the icons/actions above) opens it
+    var summary = ev.target.closest(".schedulebeta-summary");
+    if (summary) { scheduleBetaExpandedIdx = +summary.dataset.idx; render(); }
   });
 
   function updateTabbar() {
