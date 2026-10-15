@@ -356,6 +356,7 @@
   .schedule-insert-form .schedule-ins-text { flex: 1 1 9rem; min-width: 7rem; }
   .schedule-insert-form .schedule-ins-cat { flex: 0 0 8rem; width: 8rem; }
   .schedule-insert-actions { display: flex; gap: 0.5rem; flex: 1 1 100%; justify-content: flex-end; }
+  .schedule-insert-hint { flex: 1 1 100%; font-size: 0.74rem; color: var(--ink-faint); line-height: 1.4; margin: 0 0 0.2rem; }
 
   /* ---------- schedule beta page: a tappable row summary that expands into
      the full home-style log form in place (time/task/category + chips +
@@ -2543,6 +2544,7 @@
     var displaced = state.scheduleBeta[afterIdx + 1];
     var prefillTime = displaced ? displaced.time : "";
     return '<div class="schedule-insert-form">' +
+      '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>' +
       '<input type="text" class="time-in schedule-ins-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
         'placeholder="0930" aria-label="New task time" value="' + escapeHtml(prefillTime) + '">' +
       '<input type="text" class="schedule-ins-dur" inputmode="numeric" placeholder="Duration e.g. 30m" aria-label="New task duration">' +
@@ -3385,6 +3387,25 @@
     var last = state.scheduleBeta[state.scheduleBeta.length - 1];
     return !!(last.time || last.text);
   }
+  // how many blank slots are free at the end of the list — insertScheduleTask
+  // only ever needs 1, but an interrupting insert (see below) needs 2
+  function scheduleBetaFreeTailSlots() {
+    var n = 0;
+    for (var i = state.scheduleBeta.length - 1; i >= 0; i--) {
+      if (state.scheduleBeta[i].time || state.scheduleBeta[i].text) break;
+      n++;
+    }
+    return n;
+  }
+  // true if inserting at time t right after afterIdx would land inside that
+  // row's own current block instead of after it's already finished — e.g.
+  // Work runs 11:34–11:40 and you insert something at 11:36, interrupting it
+  // partway through rather than appending once it's done
+  function scheduleBetaInsertInterrupts(rows, afterIdx, t) {
+    var cur = rows[afterIdx], next = rows[afterIdx + 1];
+    if (!cur || !cur.time || !next || !next.time) return false;
+    return hhmmToMinutes(cur.time) < hhmmToMinutes(t) && hhmmToMinutes(t) < hhmmToMinutes(next.time);
+  }
   // commits a row's edit-form submission (Save) — handles both filling in a
   // previously-blank row and editing an existing one identically, same as
   // updateScheduleTime does for the real Schedule page's bare inputs: if the
@@ -3417,22 +3438,44 @@
       return s;
     });
   }
-  // same corrected-delta insert as insertScheduleTask, plus category, against scheduleBeta
+  // same corrected-delta insert as insertScheduleTask, plus category and one
+  // more thing: if t falls inside the previous row's own current block (an
+  // interruption — something came up partway through that task), the
+  // remaining time it still owes becomes its own "<task> (continued)" row
+  // right after the new one, carrying over its category, so nothing gets
+  // silently dropped when you get back to it. In that case the net push on
+  // everything after is just the new task's own duration — the continued
+  // row absorbs the rest, it isn't extra new time.
   function insertScheduleBetaTask(afterIdx, t, dur, text, category) {
     var now = new Date().toISOString();
     queueMutation(function (s) {
       var rows = s.scheduleBeta.slice();
+      var cur = rows[afterIdx];
       var nextOld = rows[afterIdx + 1] ? rows[afterIdx + 1].time : "";
-      var delta = nextOld ? (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld)) : 0;
-      for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
+      var interrupts = scheduleBetaInsertInterrupts(rows, afterIdx, t);
+      var remaining = interrupts ? hhmmToMinutes(nextOld) - hhmmToMinutes(t) : 0;
+      var slots = interrupts ? 2 : 1;
+      var delta = !nextOld ? 0 : interrupts ? dur : (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld));
+
+      for (var k = rows.length - 1 - slots; k > afterIdx; k--) rows[k + slots] = rows[k];
       if (delta) {
-        for (var i = afterIdx + 2; i < rows.length; i++) {
+        for (var i = afterIdx + 1 + slots; i < rows.length; i++) {
           if (rows[i] && rows[i].time) {
             rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
           }
         }
       }
       rows[afterIdx + 1] = { time: t, text: text || "", category: category || "", plannedMin: dur, done: "", updatedAt: now };
+      if (interrupts) {
+        rows[afterIdx + 2] = {
+          time: minutesToHHMM(hhmmToMinutes(t) + dur),
+          text: (cur.text || "Task") + " (continued)",
+          category: cur.category || "",
+          plannedMin: remaining,
+          done: "",
+          updatedAt: now
+        };
+      }
       s.scheduleBeta = rows;
       return s;
     });
@@ -4279,7 +4322,7 @@
     if (cancelBtn) { scheduleBetaInsertAfter = -1; render(); return; }
     var saveBtn = ev.target.closest('[data-act="schedulebeta-insert-save"]');
     if (saveBtn) {
-      if (scheduleBetaIsFull()) { alert("Schedule Beta is full (30 rows) — delete or finish a task first."); return; }
+      var afterIdx = +saveBtn.dataset.idx;
       var form = saveBtn.closest(".schedule-insert-form");
       var timeEl = form.querySelector(".schedule-ins-time");
       var durEl = form.querySelector(".schedule-ins-dur");
@@ -4289,8 +4332,15 @@
       if (!t) { timeEl.focus(); return; }
       var dur = Math.round(parseDuration(durEl.value));
       if (!dur || dur <= 0) { durEl.focus(); return; }
+      // an interrupting insert needs 2 free slots (the new task plus a
+      // "...continued" row for whatever it bumped), a normal one needs 1
+      var slotsNeeded = scheduleBetaInsertInterrupts(state.scheduleBeta, afterIdx, t) ? 2 : 1;
+      if (scheduleBetaFreeTailSlots() < slotsNeeded) {
+        alert("Schedule Beta doesn't have room for this (30 rows) — delete or finish a task first.");
+        return;
+      }
       scheduleBetaInsertAfter = -1;
-      insertScheduleBetaTask(+saveBtn.dataset.idx, t, dur, textEl.value, catEl.value);
+      insertScheduleBetaTask(afterIdx, t, dur, textEl.value, catEl.value);
       return;
     }
     var delBtn = ev.target.closest('[data-act="schedulebeta-delete"]');
