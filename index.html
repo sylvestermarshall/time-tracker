@@ -354,7 +354,16 @@
   .schedule-insert-form .schedule-ins-time { flex: 0 0 4.4rem; width: 4.4rem; text-align: center; }
   .schedule-insert-form .schedule-ins-dur { flex: 0 0 7rem; width: 7rem; }
   .schedule-insert-form .schedule-ins-text { flex: 1 1 9rem; min-width: 7rem; }
+  .schedule-insert-form .schedule-ins-cat { flex: 0 0 8rem; width: 8rem; }
   .schedule-insert-actions { display: flex; gap: 0.5rem; flex: 1 1 100%; justify-content: flex-end; }
+
+  /* ---------- schedule beta page: adds a category tag to the schedule row
+     pattern above; everything else (row/dur/icon styles) is shared ---------- */
+  .schedulebeta-cat {
+    flex: 0 0 auto; font-size: 0.72rem; font-weight: 600; color: var(--ink-faint);
+    background: var(--line-soft); border-radius: var(--radius-pill);
+    padding: 0.3rem 0.6rem; white-space: nowrap;
+  }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -683,6 +692,14 @@
     <div id="scheduleList"></div>
   </div>
 
+  <!-- SCHEDULE BETA: trial combo of the Home log form's UX (time/task/category
+       with chips + autocomplete) with Schedule's planning features. Entirely
+       separate data (state.scheduleBeta) — never touches entries/categories/
+       taskCatalog beyond reading them for suggestions. -->
+  <div id="scheduleBetaPage" hidden>
+    <div id="scheduleBetaList"></div>
+  </div>
+
   <!-- COMPARE: two dates, up to 3 categories, cumulative time-of-day charts -->
   <div id="comparePage" hidden>
     <div id="compareBody"></div>
@@ -798,6 +815,11 @@
   // schedule route: index of the row whose "insert a task after this one"
   // mini-form is currently open, or -1 if none is
   var scheduleInsertAfter = -1;
+  // same idea, for the Schedule Beta trial page's own insert form
+  var scheduleBetaInsertAfter = -1;
+  // "1 min ago" step counter for Schedule Beta's add-form time field, same
+  // cycling behavior as the home log form's agoN
+  var scheduleBetaAgoN = 0;
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -968,7 +990,8 @@
       deletedTaskGoals: {}, taskGoalRevivals: {},
       focusSwitches: [],
       abcNotes: [], deletedAbc: {},
-      schedule: emptySchedule()
+      schedule: emptySchedule(),
+      scheduleBeta: emptyScheduleBeta()
     };
   }
 
@@ -1008,6 +1031,46 @@
     for (var i = 0; i < SCHEDULE_SIZE; i++) {
       var ra = a[i] || { time: "", text: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
       var rb = b[i] || { time: "", text: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
+      out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
+    }
+    return out;
+  }
+
+  // Schedule Beta (Menu > Schedule Beta): a trial combining the home log
+  // form's entry UX with Schedule's planning features. Same row shape as
+  // Schedule plus a category, same fixed-size/positional merge rule — kept
+  // as entirely separate functions (not a parameterized shared one) and a
+  // separate state.scheduleBeta array so nothing here can ever cross-affect
+  // the real Schedule feature or the real logged entries.
+  function emptyScheduleBeta() {
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", category: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() });
+    return out;
+  }
+  function normalizeScheduleBeta(raw) {
+    var arr = Array.isArray(raw) ? raw : [];
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) {
+      var r = arr[i];
+      var t = r && typeof r.time === "string" ? normTime(r.time) : "";
+      var planned = r && typeof r.plannedMin === "number" && isFinite(r.plannedMin) && r.plannedMin >= 0 ? Math.round(r.plannedMin) : null;
+      out.push({
+        time: t,
+        text: r && typeof r.text === "string" ? r.text : "",
+        category: r && typeof r.category === "string" ? r.category : "",
+        plannedMin: planned,
+        done: r && (r.done === "yes" || r.done === "no") ? r.done : "",
+        updatedAt: r && r.updatedAt && !isNaN(new Date(r.updatedAt)) ? new Date(r.updatedAt).toISOString() : new Date(0).toISOString()
+      });
+    }
+    return out;
+  }
+  function mergeScheduleBeta(a, b) {
+    a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
+    var out = [];
+    for (var i = 0; i < SCHEDULE_SIZE; i++) {
+      var ra = a[i] || { time: "", text: "", category: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
+      var rb = b[i] || { time: "", text: "", category: "", plannedMin: null, done: "", updatedAt: new Date(0).toISOString() };
       out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
     }
     return out;
@@ -1198,7 +1261,8 @@
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
-      schedule: normalizeSchedule(raw.schedule)
+      schedule: normalizeSchedule(raw.schedule),
+      scheduleBeta: normalizeScheduleBeta(raw.scheduleBeta)
     };
   }
 
@@ -1294,7 +1358,8 @@
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
-      schedule: mergeSchedule(a.schedule, b.schedule)
+      schedule: mergeSchedule(a.schedule, b.schedule),
+      scheduleBeta: mergeScheduleBeta(a.scheduleBeta, b.scheduleBeta)
     });
   }
 
@@ -1696,6 +1761,8 @@
       route = "abc";
     } else if (h === "schedule") {
       route = "schedule";
+    } else if (h === "schedulebeta") {
+      route = "schedulebeta";
     } else if (h === "compare") {
       route = "compare";
     } else if (h === "comparedetail" && compareDetailCat) {
@@ -1717,8 +1784,9 @@
     var isTrend = route === "trend";
     var isAbc = route === "abc";
     var isSchedule = route === "schedule";
+    var isScheduleBeta = route === "schedulebeta";
     var dated = route === "day" || isOverview;
-    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend || isAbc || isSchedule;
+    var otherPage = isGoals || isOverview || isCategories || isMenu || isCompare || isCompareDetail || isChips || isTrend || isAbc || isSchedule || isScheduleBeta;
     document.getElementById("backHome").hidden = isHome;
     document.getElementById("daynav").hidden = !dated;
     document.getElementById("homeHead").hidden = !isHome;
@@ -1731,6 +1799,7 @@
     document.getElementById("trendPage").hidden = !isTrend;
     document.getElementById("abcPage").hidden = !isAbc;
     document.getElementById("schedulePage").hidden = !isSchedule;
+    document.getElementById("scheduleBetaPage").hidden = !isScheduleBeta;
     document.getElementById("comparePage").hidden = !isCompare;
     document.getElementById("compareDetailPage").hidden = !isCompareDetail;
     document.getElementById("timeline").hidden = otherPage;
@@ -1749,6 +1818,7 @@
   function goToTrend() { location.hash = "#trend"; }
   function goToAbc() { location.hash = "#abc"; }
   function goToSchedule() { location.hash = "#schedule"; }
+  function goToScheduleBeta() { location.hash = "#schedulebeta"; }
   function goToCompare() { location.hash = "#compare"; }
   function goToCompareDetail(cat) { compareDetailCat = cat; location.hash = "#comparedetail"; }
   function goDated(dayK) { (route === "overview" ? goToOverview : goToDay)(dayK); }
@@ -1776,6 +1846,7 @@
     if (route === "trend") { renderTrend(); return; }
     if (route === "abc") { renderAbcPage(); return; }
     if (route === "schedule") { renderSchedulePage(); return; }
+    if (route === "schedulebeta") { renderScheduleBetaPage(); return; }
     if (route === "compare") { renderCompare(); return; }
     if (route === "compareDetail") { renderCompareDetailPage(); return; }
     if (route === "home") viewDate = todayKey();
@@ -2011,7 +2082,8 @@
     { act: "menu-tasks", icon: "list-checks", label: "Tasks", go: goToTasks },
     { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
     { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend },
-    { act: "menu-schedule", icon: "calendar-clock", label: "Schedule", go: goToSchedule }
+    { act: "menu-schedule", icon: "calendar-clock", label: "Schedule", go: goToSchedule },
+    { act: "menu-schedulebeta", icon: "flask-conical", label: "Schedule Beta", go: goToScheduleBeta }
   ];
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
@@ -2430,6 +2502,207 @@
       var insDurEl = box.querySelector(".schedule-ins-dur");
       if (insDurEl) insDurEl.focus();
     }
+  }
+
+  // ---------- schedule beta page: home-style logging + schedule's planning ----------
+  // same idea as scheduleDurGroupHtml, pointed at scheduleBeta's own reset act
+  function scheduleBetaDurGroupHtml(row, i, liveMin) {
+    var durHtml = scheduleDurHtml(row, liveMin);
+    if (!durHtml) return "";
+    var reset = "";
+    if (liveMin != null) {
+      var mismatch = row.plannedMin != null && liveMin !== row.plannedMin;
+      reset = '<button type="button" class="schedule-icon-btn' + (mismatch ? "" : " muted") + '" data-act="schedulebeta-reset-plan" data-idx="' + i + '" ' +
+        'aria-label="Reset planned duration to match actual" ' +
+        'title="Just replanning, not an overrun? Reset Plan to match Actual"><i data-lucide="rotate-ccw"></i></button>';
+    }
+    return '<div class="schedule-dur-group">' + durHtml + reset + "</div>";
+  }
+  // same as scheduleInsertFormHtml, plus a category field so a mid-list
+  // insert here can capture the same info the main add form does
+  function scheduleBetaInsertFormHtml(afterIdx) {
+    var displaced = state.scheduleBeta[afterIdx + 1];
+    var prefillTime = displaced ? displaced.time : "";
+    return '<div class="schedule-insert-form">' +
+      '<input type="text" class="time-in schedule-ins-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+        'placeholder="0930" aria-label="New task time" value="' + escapeHtml(prefillTime) + '">' +
+      '<input type="text" class="schedule-ins-dur" inputmode="numeric" placeholder="Duration e.g. 30m" aria-label="New task duration">' +
+      '<input type="text" class="schedule-ins-text" placeholder="New task" aria-label="New task name">' +
+      '<input type="text" class="schedule-ins-cat" placeholder="Category (optional)" aria-label="New task category">' +
+      '<div class="schedule-insert-actions">' +
+        '<button type="button" class="btn btn-ghost btn-small" data-act="schedulebeta-insert-cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary btn-small" data-act="schedulebeta-insert-save" data-idx="' + afterIdx + '">Add</button>' +
+      "</div>" +
+    "</div>";
+  }
+  // quick-pick chips for the Schedule Beta add form — same source data
+  // (taskCatalog/categories/chipOrder/chipHidden) as the real log form on
+  // Home, read-only here; this page never writes to any of them
+  function renderScheduleBetaChips() {
+    var taskNames = orderedNames(visibleNames("tasks", allTaskNames()), state.chipOrder.tasks, taskCounts());
+    var catNames = orderedNames(visibleNames("categories", manageableCategories()), state.chipOrder.categories, categoryCounts());
+    document.getElementById("sb-task-chips").innerHTML = taskNames.map(function (t) {
+      return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
+    }).join("");
+    document.getElementById("sb-category-chips").innerHTML = catNames.map(function (c) {
+      return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
+    }).join("");
+  }
+  // wires the add form's Now/ago buttons, chips, and task/category
+  // autocomplete — called fresh after every render since the form's DOM is
+  // rebuilt from scratch each time (this page has no persistent static HTML
+  // like the real add form does)
+  function wireScheduleBetaForm() {
+    var timeEl = document.getElementById("sb-time");
+    var taskEl = document.getElementById("sb-task");
+    var catEl = document.getElementById("sb-category");
+
+    attachTimeInput(timeEl);
+    document.getElementById("sb-now-btn").addEventListener("click", function () {
+      timeEl.value = nowHHMM();
+      scheduleBetaAgoN = 0;
+      document.getElementById("sb-ago-btn").textContent = "1 min ago";
+    });
+    document.getElementById("sb-ago-btn").addEventListener("click", function () {
+      scheduleBetaAgoN = (scheduleBetaAgoN % 3) + 1;
+      timeEl.value = hhmmMinsAgo(scheduleBetaAgoN);
+      this.textContent = scheduleBetaAgoN + " min ago";
+    });
+
+    document.getElementById("sb-task-clear").addEventListener("click", function () { taskEl.value = ""; taskEl.focus(); });
+    document.getElementById("sb-category-clear").addEventListener("click", function () { catEl.value = ""; catEl.focus(); });
+
+    var hideCatAc = wireCategoryAc(catEl, document.getElementById("sb-category-ac"), function (name) {
+      catEl.value = name; hideCatAc(); catEl.blur();
+    });
+    var hideTaskAc = wireTaskAc(taskEl, document.getElementById("sb-task-ac"), function (name, cat) {
+      taskEl.value = name; hideTaskAc();
+      if (cat) { catEl.value = cat; taskEl.blur(); } else catEl.focus();
+    }, function () { catEl.focus(); });
+
+    document.getElementById("sb-task-chips").addEventListener("click", function (ev) {
+      var chip = ev.target.closest(".chip");
+      if (!chip) return;
+      taskEl.value = chip.dataset.name;
+      var cat = state.taskCatalog[chip.dataset.name];
+      if (cat) catEl.value = cat;
+    });
+    document.getElementById("sb-category-chips").addEventListener("click", function (ev) {
+      var chip = ev.target.closest(".chip");
+      if (chip) catEl.value = chip.dataset.name;
+    });
+
+    document.getElementById("sb-add-btn").addEventListener("click", function () {
+      var t = timeEl.value.trim() ? normTime(timeEl.value) : nowHHMM();
+      if (!t) { timeEl.value = ""; timeEl.focus(); return; }
+      if (!taskEl.value.trim()) { taskEl.focus(); return; }
+      if (scheduleBetaIsFull()) { alert("Schedule Beta is full (30 rows) — delete or finish a task first."); return; }
+      var text = taskEl.value, category = catEl.value;
+      // clear the form before mutating — queueMutation renders synchronously
+      // and the next render preserves whatever's currently in these fields,
+      // so this has to happen first or the just-added values reappear
+      taskEl.value = ""; catEl.value = ""; timeEl.value = nowHHMM();
+      scheduleBetaAgoN = 0;
+      addScheduleBetaEntry(t, text, category);
+    });
+
+    renderScheduleBetaChips();
+  }
+  function renderScheduleBetaPage() {
+    document.getElementById("pageTitle").textContent = "Schedule Beta";
+    var box = document.getElementById("scheduleBetaList");
+    // this page fully rebuilds on every mutation (including ones triggered by
+    // tapping a row elsewhere, e.g. a done check) — preserve whatever's
+    // mid-typed in the add form across that, or a stray tap elsewhere would
+    // silently wipe it
+    var prevTimeEl = document.getElementById("sb-time");
+    var prevTaskEl = document.getElementById("sb-task");
+    var prevCatEl = document.getElementById("sb-category");
+    var keepTime = prevTimeEl ? prevTimeEl.value : "";
+    var keepTask = prevTaskEl ? prevTaskEl.value : "";
+    var keepCat = prevCatEl ? prevCatEl.value : "";
+
+    box.innerHTML =
+      '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
+      "</div>" +
+      '<p class="goals-intro">A trial: log tasks the same way you do on Home — time, task, category, with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
+      '<div class="panel" id="sbAddPanel">' +
+        '<div class="field">' +
+          '<label class="lbl" for="sb-time"><i data-lucide="clock"></i>Start time</label>' +
+          '<div class="time-wrap">' +
+            '<input type="text" id="sb-time" class="time-in" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="0930" aria-label="Start time, 24-hour, type four digits">' +
+            '<button type="button" class="btn btn-ghost btn-small" id="sb-now-btn">Now</button>' +
+            '<button type="button" class="btn btn-ghost btn-small" id="sb-ago-btn" title="Tap to step back a minute at a time">1 min ago</button>' +
+          "</div>" +
+        "</div>" +
+        '<div class="field">' +
+          '<label class="lbl" for="sb-task"><i data-lucide="zap"></i>Tasks</label>' +
+          '<div class="chip-row" id="sb-task-chips"></div>' +
+          '<div class="input-clear-wrap">' +
+            '<input type="text" id="sb-task" placeholder="e.g. Reviewed pull requests" role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+            '<button type="button" class="field-clear" id="sb-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>' +
+          "</div>" +
+          '<div class="ac-list" id="sb-task-ac" hidden></div>' +
+        "</div>" +
+        '<div class="field">' +
+          '<label class="lbl" for="sb-category"><i data-lucide="layout-grid"></i>Category</label>' +
+          '<div class="chip-row" id="sb-category-chips"></div>' +
+          '<div class="input-clear-wrap">' +
+            '<input type="text" id="sb-category" placeholder="e.g. Work" role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+            '<button type="button" class="field-clear" id="sb-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>' +
+          "</div>" +
+          '<div class="ac-list" id="sb-category-ac" hidden></div>' +
+        "</div>" +
+        '<div class="form-actions">' +
+          '<button type="button" class="btn btn-primary" id="sb-add-btn"><i data-lucide="calendar-plus"></i>Add to schedule</button>' +
+        "</div>" +
+      "</div>" +
+      '<div class="schedule-head" style="margin-top:1.2rem;">' +
+        '<span class="sp-time"></span><span class="sp-text"></span>' +
+        '<span class="sp-dur">Plan → Actual</span>' +
+      "</div>" +
+      '<div class="schedule-rows">' +
+      state.scheduleBeta.map(function (row, i) {
+        var used = !!(row.time || row.text);
+        return '<div class="schedule-row-wrap">' +
+          '<div class="schedule-row">' +
+            '<input type="text" class="time-in schedule-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+              'placeholder="0930" aria-label="Row ' + (i + 1) + ' time" data-idx="' + i + '" value="' + escapeHtml(row.time) + '">' +
+            '<input type="text" class="schedule-text" placeholder="What are you doing?" ' +
+              'aria-label="Row ' + (i + 1) + ' activity" data-idx="' + i + '" value="' + escapeHtml(row.text) + '">' +
+            (row.category ? '<span class="schedulebeta-cat">' + escapeHtml(row.category) + "</span>" : "") +
+            scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(state.scheduleBeta, i)) +
+            (used ? '<div class="schedule-row-actions">' +
+              '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
+                'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
+              '<button type="button" class="schedule-icon-btn danger" data-act="schedulebeta-delete" data-idx="' + i + '" ' +
+                'aria-label="Delete row ' + (i + 1) + '" title="Delete task"><i data-lucide="trash-2"></i></button>' +
+              '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
+                'data-act="schedulebeta-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
+                'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
+              '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
+                'data-act="schedulebeta-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
+                'title="Done on time"><i data-lucide="check"></i></button>' +
+            "</div>" : "") +
+          "</div>" +
+          (scheduleBetaInsertAfter === i ? scheduleBetaInsertFormHtml(i) : "") +
+        "</div>";
+      }).join("") +
+      "</div>";
+
+    box.querySelectorAll(".schedule-time").forEach(attachTimeInput);
+    var insTimeEl = box.querySelector(".schedule-ins-time");
+    if (insTimeEl) {
+      attachTimeInput(insTimeEl);
+      var insDurEl = box.querySelector(".schedule-ins-dur");
+      if (insDurEl) insDurEl.focus();
+    }
+
+    document.getElementById("sb-time").value = keepTime || nowHHMM();
+    document.getElementById("sb-task").value = keepTask;
+    document.getElementById("sb-category").value = keepCat;
+    wireScheduleBetaForm();
   }
 
   // ---------- overview page ----------
@@ -3130,6 +3403,160 @@
       var live = scheduleLiveDurationMin(rows, idx);
       if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
       s.schedule = rows;
+      return s;
+    });
+  }
+
+  // ---------- schedule beta mutations ----------
+  // true if the last slot is already in use — same guard as scheduleIsFull,
+  // against scheduleBeta instead
+  function scheduleBetaIsFull() {
+    var last = state.scheduleBeta[state.scheduleBeta.length - 1];
+    return !!(last.time || last.text);
+  }
+  // the add form's "Add to schedule" — writes into the first still-blank
+  // slot (so entries land in the order you add them, like Home's log form),
+  // then backfills the previous row's Plan the same way a blank Schedule row
+  // getting its first time does, if it's now computable
+  function addScheduleBetaEntry(t, text, category) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta.slice();
+      var idx = -1;
+      for (var i = 0; i < rows.length; i++) { if (!rows[i].time && !rows[i].text) { idx = i; break; } }
+      if (idx === -1) return s;
+      rows[idx] = { time: t, text: text || "", category: category || "", plannedMin: null, done: "", updatedAt: now };
+      if (idx > 0 && rows[idx - 1].plannedMin == null && rows[idx - 1].time && rows[idx].time) {
+        rows[idx - 1] = Object.assign({}, rows[idx - 1], { plannedMin: scheduleLiveDurationMin(rows, idx - 1), updatedAt: now });
+      }
+      s.scheduleBeta = rows;
+      return s;
+    });
+  }
+  // same corrected-delta insert as insertScheduleTask, plus category, against scheduleBeta
+  function insertScheduleBetaTask(afterIdx, t, dur, text, category) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta.slice();
+      var nextOld = rows[afterIdx + 1] ? rows[afterIdx + 1].time : "";
+      var delta = nextOld ? (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld)) : 0;
+      for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
+      if (delta) {
+        for (var i = afterIdx + 2; i < rows.length; i++) {
+          if (rows[i] && rows[i].time) {
+            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
+          }
+        }
+      }
+      rows[afterIdx + 1] = { time: t, text: text || "", category: category || "", plannedMin: dur, done: "", updatedAt: now };
+      s.scheduleBeta = rows;
+      return s;
+    });
+  }
+  function deleteScheduleBetaTask(idx) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta.slice();
+      var gap = scheduleLiveDurationMin(rows, idx) || 0;
+      for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
+      if (gap) {
+        for (var i = idx; i < rows.length - 1; i++) {
+          if (rows[i] && rows[i].time) {
+            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) - gap), updatedAt: now });
+          }
+        }
+      }
+      rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", updatedAt: now };
+      s.scheduleBeta = rows;
+      return s;
+    });
+  }
+  function setScheduleBetaDone(idx, val) {
+    var cur = (state.scheduleBeta[idx] || {}).done || "";
+    var next = cur === val ? "" : val;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta.slice();
+      rows[idx] = Object.assign({}, rows[idx], { done: next, updatedAt: now });
+      s.scheduleBeta = rows;
+      return s;
+    });
+    if (next === "yes") playDoneChime();
+  }
+  function resetScheduleBetaPlan(idx) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta.slice();
+      var live = scheduleLiveDurationMin(rows, idx);
+      if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
+      s.scheduleBeta = rows;
+      return s;
+    });
+  }
+  function resetScheduleBeta() {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      s.scheduleBeta = emptyScheduleBeta().map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
+      return s;
+    });
+  }
+  // row time/text edits use the quiet mutation + a DOM patch scoped to
+  // #scheduleBetaList (never document-wide — this page's rows share class
+  // names with the real Schedule page's rows, and both can be in the DOM
+  // at once since routes just toggle `hidden`), same reasoning as
+  // updateScheduleTime: a full render() here would destroy whatever row
+  // field the next tap is landing on, mid-gesture
+  function updateScheduleBetaTime(idx, rawValue, el) {
+    var t = normTime(rawValue);
+    el.value = t;
+    var before = (state.scheduleBeta[idx] || {}).time || "";
+    if (t === before) return;
+    var now = new Date().toISOString();
+    queueMutationQuiet(function (s) {
+      var rows = s.scheduleBeta.slice();
+      rows[idx] = Object.assign({}, rows[idx], { time: t, updatedAt: now });
+      if (before && t) {
+        var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
+        if (delta) {
+          for (var i = idx + 1; i < rows.length; i++) {
+            if (rows[i] && rows[i].time) {
+              rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
+            }
+          }
+        }
+      }
+      rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
+      for (var j = 0; j < rows.length - 1; j++) {
+        if (rows[j].plannedMin == null && rows[j].time && rows[j + 1].time) {
+          rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
+        }
+      }
+      s.scheduleBeta = rows;
+      return s;
+    });
+    var box = document.getElementById("scheduleBetaList");
+    box.querySelectorAll(".schedule-row").forEach(function (rowEl, i) {
+      var row = state.scheduleBeta[i];
+      var timeInp = rowEl.querySelector(".schedule-time");
+      if (timeInp !== el) timeInp.value = row.time;
+      var groupEl = rowEl.querySelector(".schedule-dur-group");
+      var html = scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(state.scheduleBeta, i));
+      if (groupEl) {
+        if (html) groupEl.outerHTML = html; else groupEl.remove();
+      } else if (html) {
+        var actionsEl = rowEl.querySelector(".schedule-row-actions");
+        if (actionsEl) actionsEl.insertAdjacentHTML("beforebegin", html);
+        else rowEl.insertAdjacentHTML("beforeend", html);
+      }
+    });
+    if (window.lucide) lucide.createIcons();
+  }
+  function updateScheduleBetaText(idx, value) {
+    var now = new Date().toISOString();
+    queueMutationQuiet(function (s) {
+      var rows = s.scheduleBeta.slice();
+      rows[idx] = Object.assign({}, rows[idx], { text: value, updatedAt: now });
+      s.scheduleBeta = rows;
       return s;
     });
   }
@@ -3909,6 +4336,50 @@
     if (timeEl) { updateScheduleTime(+timeEl.dataset.idx, timeEl.value, timeEl); return; }
     var textEl = ev.target.closest(".schedule-text");
     if (textEl) { updateScheduleText(+textEl.dataset.idx, textEl.value); return; }
+  });
+
+  var scheduleBetaList = document.getElementById("scheduleBetaList");
+  scheduleBetaList.addEventListener("click", function (ev) {
+    if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear the whole trial schedule? This can't be undone.")) {
+      resetScheduleBeta();
+      return;
+    }
+    var doneYesBtn = ev.target.closest('[data-act="schedulebeta-done-yes"]');
+    if (doneYesBtn) { setScheduleBetaDone(+doneYesBtn.dataset.idx, "yes"); return; }
+    var doneNoBtn = ev.target.closest('[data-act="schedulebeta-done-no"]');
+    if (doneNoBtn) { setScheduleBetaDone(+doneNoBtn.dataset.idx, "no"); return; }
+    var resetPlanBtn = ev.target.closest('[data-act="schedulebeta-reset-plan"]');
+    if (resetPlanBtn) { resetScheduleBetaPlan(+resetPlanBtn.dataset.idx); return; }
+    var insBtn = ev.target.closest('[data-act="schedulebeta-insert"]');
+    if (insBtn) { scheduleBetaInsertAfter = +insBtn.dataset.idx; render(); return; }
+    var cancelBtn = ev.target.closest('[data-act="schedulebeta-insert-cancel"]');
+    if (cancelBtn) { scheduleBetaInsertAfter = -1; render(); return; }
+    var saveBtn = ev.target.closest('[data-act="schedulebeta-insert-save"]');
+    if (saveBtn) {
+      if (scheduleBetaIsFull()) { alert("Schedule Beta is full (30 rows) — delete or finish a task first."); return; }
+      var form = saveBtn.closest(".schedule-insert-form");
+      var timeEl = form.querySelector(".schedule-ins-time");
+      var durEl = form.querySelector(".schedule-ins-dur");
+      var textEl = form.querySelector(".schedule-ins-text");
+      var catEl = form.querySelector(".schedule-ins-cat");
+      var t = normTime(timeEl.value);
+      if (!t) { timeEl.focus(); return; }
+      var dur = Math.round(parseDuration(durEl.value));
+      if (!dur || dur <= 0) { durEl.focus(); return; }
+      scheduleBetaInsertAfter = -1;
+      insertScheduleBetaTask(+saveBtn.dataset.idx, t, dur, textEl.value, catEl.value);
+      return;
+    }
+    var delBtn = ev.target.closest('[data-act="schedulebeta-delete"]');
+    if (delBtn && confirm("Delete this task? Everything after it moves up to close the gap.")) {
+      deleteScheduleBetaTask(+delBtn.dataset.idx);
+    }
+  });
+  scheduleBetaList.addEventListener("change", function (ev) {
+    var timeEl = ev.target.closest(".schedule-time");
+    if (timeEl) { updateScheduleBetaTime(+timeEl.dataset.idx, timeEl.value, timeEl); return; }
+    var textEl = ev.target.closest(".schedule-text");
+    if (textEl) { updateScheduleBetaText(+textEl.dataset.idx, textEl.value); return; }
   });
 
   function updateTabbar() {
