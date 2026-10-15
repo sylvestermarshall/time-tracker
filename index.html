@@ -2685,10 +2685,11 @@
     document.getElementById("pageTitle").textContent = "Schedule Beta";
     var box = document.getElementById("scheduleBetaList");
     box.innerHTML =
-      '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
+      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaHistoryBtn"><i data-lucide="history"></i>History</button>' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with today’s date and however long it actually took, same as typing it into Home.</p>' +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with today’s date and however long it actually took, same as typing it into Home. <b>History</b> opens the day view (same prev/next day and date picker as the Day page) to see what actually got logged on any given day.</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
@@ -4555,6 +4556,7 @@
     // plain click on it (e.g. a tap with no movement) shouldn't also expand
     // the row for editing
     if (ev.target.closest(".schedulebeta-drag")) return;
+    if (ev.target.closest("#scheduleBetaHistoryBtn")) { goToDay(todayKey()); return; }
     if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear the whole trial schedule? This can't be undone.")) {
       resetScheduleBeta();
       return;
