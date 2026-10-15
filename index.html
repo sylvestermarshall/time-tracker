@@ -495,6 +495,14 @@
     font-size: 1.1rem; font-weight: 600; color: var(--ink);
     padding: 0.2rem 0.45rem 0.1rem;
   }
+  /* on Home, flags the one still-running entry spliced in from a previous
+     day (see globalOngoingMainRow) so "11:00 PM" reads as "yesterday,
+     11:00 PM" instead of looking like it belongs to today */
+  .entry-start-day {
+    display: block; font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--accent); background: var(--accent-soft);
+    padding: 0.12rem 0.3rem;
+  }
   .t-dur {
     font-size: 1rem; font-weight: 700; color: var(--accent-ink); background: var(--accent);
     padding: 0.18rem 0.45rem; white-space: nowrap; line-height: 1.2;
@@ -1589,6 +1597,21 @@
 
     rows.sort(function (a, b) { return new Date(a.entry.startAt) - new Date(b.entry.startAt); });
     return rows;
+  }
+
+  // the single main-chain entry that's still genuinely open right now —
+  // found from the full chronological chain (not any one day's slice of
+  // it), so a task started last night with no end time keeps showing as
+  // running on Home today instead of silently vanishing at midnight
+  // (rowsForDay only surfaces an entry under the day it started on).
+  // Returns null if the chain is explicitly closed (a stop marker last) or
+  // the latest entry already has an end time.
+  function globalOngoingMainRow() {
+    var mainSeq = state.entries.filter(function (e) { return !e.concurrent; })
+      .sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
+    var last = mainSeq[mainSeq.length - 1];
+    if (!last || last.stop || last.endAt) return null;
+    return { entry: last, lane: "main", endAt: null, autoEndAt: null, hasManualEnd: false, isLast: true, ongoing: true };
   }
 
   // groups entries into overlap "episodes" (connected components by direct
@@ -3018,6 +3041,16 @@
 
     // home shows only what's running now; the full day view shows everything
     var rows = route === "home" ? allRows.filter(function (r) { return r.ongoing; }) : allRows;
+    if (route === "home") {
+      // if the thing that's actually still running started before today
+      // (e.g. logged going to bed last night), rowsForDay(today) can't see
+      // it — splice it in directly so Home never looks like tracking
+      // stopped at midnight just because nothing's been logged today yet
+      var openRow = globalOngoingMainRow();
+      if (openRow && !rows.some(function (r) { return r.entry.id === openRow.entry.id; })) {
+        rows = [openRow].concat(rows);
+      }
+    }
     showMore.hidden = route !== "home";
     if (route === "home") {
       showMore.textContent = "Show all " + nonStop.length + (nonStop.length === 1 ? " entry →" : " entries →");
@@ -3080,10 +3113,17 @@
             '<span class="entry-focus-label">' + (focusSplit.percent[e.id] || 0) + "%</span>" +
           "</span>"
         : "";
+      // flags the spliced-in cross-midnight row on Home (see
+      // globalOngoingMainRow) so it reads as "11:00 PM yesterday", not just
+      // a bare time that looks like it belongs to today
+      var startDayK = dateKey(new Date(e.startAt));
+      var crossDayHtml = startDayK !== viewDate
+        ? '<span class="entry-start-day">' + escapeHtml(relLabel(startDayK) || niceDateLabel(startDayK)) + "</span>"
+        : "";
       return '<li class="entry' + (along ? " alongside" : "") + '" data-id="' + e.id + '">' +
         '<div class="entry-head">' +
           '<span class="entry-left">' +
-            '<span class="entry-time"><span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
+            '<span class="entry-time">' + crossDayHtml + '<span class="t-start">' + fmtClock(e.startAt) + "</span>" + durHtml + "</span>" +
             '<span class="entry-main">' +
               '<span class="entry-task">' + escapeHtml(e.task || "(no task)") + "</span><br>" +
               (e.category ? '<span class="entry-category" style="' + catStyle(e.category) + '">' + escapeHtml(e.category) + "</span>" : "") +
