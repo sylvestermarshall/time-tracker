@@ -255,7 +255,7 @@
   /* touch-action: none keeps the browser from hijacking the gesture as a page
      scroll the instant a finger lands on the handle, so pointermove reorder
      logic gets every move event */
-  .chip-drag { touch-action: none; }
+  .chip-drag, .schedulebeta-drag { touch-action: none; }
   .goal-cat { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 0.6rem; font-weight: 700; }
   .goal-cat-name { min-width: 0; overflow-wrap: break-word; }
   .goal-row .goal-input {
@@ -381,6 +381,7 @@
   .schedulebeta-summary-text { flex: 1 1 8rem; min-width: 6rem; color: var(--ink); }
   .schedulebeta-summary.empty .schedulebeta-summary-text { color: var(--ink-faint); font-style: italic; }
   .schedulebeta-edit { margin-bottom: 0; }
+  .schedule-row-wrap.dragging { opacity: 0.35; }
 
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
@@ -840,6 +841,9 @@
   // "1 min ago" step counter for whichever Schedule Beta row's edit form is
   // open, same cycling behavior as the home log form's agoN
   var scheduleBetaAgoN = 0;
+  // drag-to-reorder state for Schedule Beta's rows (see the pointer-events
+  // wiring near the bottom, same approach as the Chips page's drag reorder)
+  var scheduleBetaDragEl = null, scheduleBetaDragPointerId = null;
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -2645,7 +2649,7 @@
       '<div style="display:flex;justify-content:flex-end;margin-bottom:0.8rem;">' +
         '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
       "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Nothing logged here touches your real tracked entries or reports — this is a standalone scratch schedule.</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
@@ -2657,6 +2661,7 @@
         return '<div class="schedule-row-wrap">' +
           '<div class="schedulebeta-summary' + (used ? "" : " empty") + '" data-idx="' + i + '" role="button" tabindex="0" ' +
             'aria-label="Row ' + (i + 1) + (used ? ", edit" : ", tap to add a task") + '">' +
+            (used ? '<button type="button" class="goal-move schedulebeta-drag" aria-label="Drag to reorder" title="Drag to reorder"><i data-lucide="grip-vertical"></i></button>' : "") +
             '<span class="schedulebeta-summary-time">' + (row.time ? escapeHtml(row.time) : "--:--") + "</span>" +
             '<span class="schedulebeta-summary-text">' + (row.text ? escapeHtml(row.text) : "Tap to add a task") + "</span>" +
             (row.category ? '<span class="schedulebeta-cat">' + escapeHtml(row.category) + "</span>" : "") +
@@ -3541,6 +3546,43 @@
       return s;
     });
   }
+  // commits a drag reorder: newOrderIdx is the dragged-to order of the
+  // currently-used rows' original indices. Each row's own duration (its
+  // live gap in the old order, or its frozen Plan if that's not computable)
+  // travels with it — the block's size doesn't change, only where it sits —
+  // and the whole chain re-times itself starting from the first row's own
+  // (unchanged) clock time, each row starting right as the one before it
+  // ends. Rows not in newOrderIdx (the blanks) just fill in after, in their
+  // original relative order.
+  function reorderScheduleBeta(newOrderIdx) {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = s.scheduleBeta;
+      var anchorTime = rows[newOrderIdx[0]] ? rows[newOrderIdx[0]].time : "";
+      var reordered;
+      if (!anchorTime) {
+        // no time to chain from — just reorder positions, leave times as is
+        reordered = newOrderIdx.map(function (idx) { return rows[idx]; });
+      } else {
+        var durations = newOrderIdx.map(function (idx) {
+          var live = scheduleLiveDurationMin(rows, idx);
+          return live != null ? live : (rows[idx].plannedMin || 0);
+        });
+        var t = anchorTime;
+        reordered = newOrderIdx.map(function (idx, pos) {
+          var r = Object.assign({}, rows[idx], { time: t, updatedAt: now });
+          t = minutesToHHMM(hhmmToMinutes(t) + durations[pos]);
+          return r;
+        });
+      }
+      var moved = {};
+      newOrderIdx.forEach(function (idx) { moved[idx] = true; });
+      var rest = [];
+      for (var i = 0; i < rows.length; i++) { if (!moved[i]) rest.push(rows[i]); }
+      s.scheduleBeta = reordered.concat(rest).slice(0, SCHEDULE_SIZE);
+      return s;
+    });
+  }
   function endEntryNow(id) {
     var iso = new Date().toISOString();
     queueMutation(function (s) {
@@ -4320,6 +4362,10 @@
 
   var scheduleBetaList = document.getElementById("scheduleBetaList");
   scheduleBetaList.addEventListener("click", function (ev) {
+    // the drag handle's own pointerdown/up already drive the reorder; a
+    // plain click on it (e.g. a tap with no movement) shouldn't also expand
+    // the row for editing
+    if (ev.target.closest(".schedulebeta-drag")) return;
     if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear the whole trial schedule? This can't be undone.")) {
       resetScheduleBeta();
       return;
@@ -4448,6 +4494,48 @@
       render();
     }
   });
+
+  // ---------- schedule beta: drag reorder ----------
+  // same pointer-events approach as the Chips page's drag reorder (not HTML5
+  // dragstart/dragover, which touchscreens don't fire) — grab the handle,
+  // drag the row's DOM node around purely visually, and only touch state on
+  // release, when the final on-screen order gets read back and committed
+  scheduleBetaList.addEventListener("pointerdown", function (ev) {
+    var handle = ev.target.closest(".schedulebeta-drag");
+    if (!handle) return;
+    var row = handle.closest(".schedule-row-wrap");
+    if (!row) return;
+    scheduleBetaDragEl = row;
+    scheduleBetaDragPointerId = ev.pointerId;
+    row.classList.add("dragging");
+    try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
+    ev.preventDefault();
+  });
+  scheduleBetaList.addEventListener("pointermove", function (ev) {
+    if (!scheduleBetaDragEl || ev.pointerId !== scheduleBetaDragPointerId) return;
+    ev.preventDefault();
+    var overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+    overEl = overEl && overEl.closest(".schedule-row-wrap");
+    var rowsList = scheduleBetaDragEl.parentNode;
+    if (!overEl || overEl === scheduleBetaDragEl || overEl.parentNode !== rowsList) return;
+    var rect = overEl.getBoundingClientRect();
+    var before = ev.clientY < rect.top + rect.height / 2;
+    rowsList.insertBefore(scheduleBetaDragEl, before ? overEl : overEl.nextSibling);
+  });
+  function endScheduleBetaDrag(ev) {
+    if (!scheduleBetaDragEl || ev.pointerId !== scheduleBetaDragPointerId) return;
+    scheduleBetaDragEl.classList.remove("dragging");
+    var rowsList = scheduleBetaDragEl.parentNode;
+    var newOrderIdx = Array.prototype.map.call(
+      rowsList.querySelectorAll(".schedulebeta-summary:not(.empty)"),
+      function (el) { return +el.dataset.idx; }
+    );
+    scheduleBetaDragEl = null;
+    scheduleBetaDragPointerId = null;
+    reorderScheduleBeta(newOrderIdx);
+  }
+  scheduleBetaList.addEventListener("pointerup", endScheduleBetaDrag);
+  scheduleBetaList.addEventListener("pointercancel", endScheduleBetaDrag);
 
   function updateTabbar() {
     // Goals/Tasks/Categories/Compare/Chips/Trend/Day have no tab of their own —
