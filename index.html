@@ -2538,60 +2538,74 @@
     }
     return '<div class="schedule-dur-group">' + durHtml + reset + "</div>";
   }
-  // same as scheduleInsertFormHtml, plus a category field so a mid-list
-  // insert here can capture the same info the main add form does
+  // the shared field markup for both of Schedule Beta's forms (the per-row
+  // edit form and the mid-list insert form) — time + Now/ago, an optional
+  // duration (insert needs one to know how much to carve out; a plain edit
+  // doesn't, its row's gap is inferred the same way the rest of Schedule's
+  // rows are), task + chips + autocomplete, category + chips + autocomplete.
+  // prefix namespaces the field classes/data-acts so the two forms' fields
+  // never collide if both happened to render at once.
+  function scheduleBetaFormFieldsHtml(prefix, row, includeDuration) {
+    row = row || { time: "", text: "", category: "" };
+    return (
+      '<div class="field">' +
+        '<label class="lbl"><i data-lucide="clock"></i>Start time</label>' +
+        '<div class="time-wrap">' +
+          '<input type="text" class="time-in ' + prefix + '-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
+            'placeholder="0930" aria-label="Start time, 24-hour, type four digits" value="' + escapeHtml(row.time) + '">' +
+          '<button type="button" class="btn btn-ghost btn-small" data-act="' + prefix + '-now">Now</button>' +
+          '<button type="button" class="btn btn-ghost btn-small" data-act="' + prefix + '-ago" title="Tap to step back a minute at a time">1 min ago</button>' +
+        "</div>" +
+      "</div>" +
+      (includeDuration ?
+        '<div class="field">' +
+          '<label class="lbl"><i data-lucide="hourglass"></i>Duration</label>' +
+          '<input type="text" class="' + prefix + '-dur" inputmode="numeric" placeholder="e.g. 30m" aria-label="Duration">' +
+        "</div>" : "") +
+      '<div class="field">' +
+        '<label class="lbl"><i data-lucide="zap"></i>Tasks</label>' +
+        '<div class="chip-row ' + prefix + '-task-chips"></div>' +
+        '<div class="input-clear-wrap">' +
+          '<input type="text" class="' + prefix + '-task" placeholder="e.g. Reviewed pull requests" value="' + escapeHtml(row.text) + '" ' +
+            'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+          '<button type="button" class="field-clear" data-act="' + prefix + '-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>' +
+        "</div>" +
+        '<div class="ac-list ' + prefix + '-task-ac" hidden></div>' +
+      "</div>" +
+      '<div class="field">' +
+        '<label class="lbl"><i data-lucide="layout-grid"></i>Category</label>' +
+        '<div class="chip-row ' + prefix + '-category-chips"></div>' +
+        '<div class="input-clear-wrap">' +
+          '<input type="text" class="' + prefix + '-category" placeholder="e.g. Work" value="' + escapeHtml(row.category || "") + '" ' +
+            'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
+          '<button type="button" class="field-clear" data-act="' + prefix + '-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>' +
+        "</div>" +
+        '<div class="ac-list ' + prefix + '-category-ac" hidden></div>' +
+      "</div>"
+    );
+  }
+  // the mid-list "insert a task after this row" form — same rich fields as
+  // the per-row edit form, plus the duration the plain edit doesn't need
   function scheduleBetaInsertFormHtml(afterIdx) {
     var displaced = state.scheduleBeta[afterIdx + 1];
-    var prefillTime = displaced ? displaced.time : "";
-    return '<div class="schedule-insert-form">' +
-      '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>' +
-      '<input type="text" class="time-in schedule-ins-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
-        'placeholder="0930" aria-label="New task time" value="' + escapeHtml(prefillTime) + '">' +
-      '<input type="text" class="schedule-ins-dur" inputmode="numeric" placeholder="Duration e.g. 30m" aria-label="New task duration">' +
-      '<input type="text" class="schedule-ins-text" placeholder="New task" aria-label="New task name">' +
-      '<input type="text" class="schedule-ins-cat" placeholder="Category (optional)" aria-label="New task category">' +
-      '<div class="schedule-insert-actions">' +
-        '<button type="button" class="btn btn-ghost btn-small" data-act="schedulebeta-insert-cancel">Cancel</button>' +
-        '<button type="button" class="btn btn-primary btn-small" data-act="schedulebeta-insert-save" data-idx="' + afterIdx + '">Add</button>' +
+    return '<div class="schedule-row-wrap">' +
+      '<div class="panel schedulebeta-edit" data-idx="' + afterIdx + '">' +
+        '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>' +
+        scheduleBetaFormFieldsHtml("sbi", { time: displaced ? displaced.time : "", text: "", category: "" }, true) +
+        '<div class="form-actions">' +
+          '<button type="button" class="btn btn-ghost" data-act="schedulebeta-insert-cancel">Cancel</button>' +
+          '<button type="button" class="btn btn-primary" data-act="schedulebeta-insert-save" data-idx="' + afterIdx + '"><i data-lucide="plus"></i>Add</button>' +
+        "</div>" +
       "</div>" +
     "</div>";
   }
   // the expanded per-row edit form — same fields/behavior as the home log
-  // form (time + Now/ago, task + chips + autocomplete, category + chips +
-  // autocomplete), just opened by tapping the row itself instead of living
-  // in a fixed panel; mirrors how a Home timeline entry expands in place
+  // form, just opened by tapping the row itself instead of living in a
+  // fixed panel; mirrors how a Home timeline entry expands in place
   function scheduleBetaEditFormHtml(row, i) {
     return '<div class="schedule-row-wrap">' +
       '<div class="panel schedulebeta-edit" data-idx="' + i + '">' +
-        '<div class="field">' +
-          '<label class="lbl"><i data-lucide="clock"></i>Start time</label>' +
-          '<div class="time-wrap">' +
-            '<input type="text" class="time-in sbe-time" inputmode="numeric" autocomplete="off" maxlength="5" ' +
-              'placeholder="0930" aria-label="Start time, 24-hour, type four digits" value="' + escapeHtml(row.time) + '">' +
-            '<button type="button" class="btn btn-ghost btn-small" data-act="sbe-now">Now</button>' +
-            '<button type="button" class="btn btn-ghost btn-small" data-act="sbe-ago" title="Tap to step back a minute at a time">1 min ago</button>' +
-          "</div>" +
-        "</div>" +
-        '<div class="field">' +
-          '<label class="lbl"><i data-lucide="zap"></i>Tasks</label>' +
-          '<div class="chip-row sbe-task-chips"></div>' +
-          '<div class="input-clear-wrap">' +
-            '<input type="text" class="sbe-task" placeholder="e.g. Reviewed pull requests" value="' + escapeHtml(row.text) + '" ' +
-              'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
-            '<button type="button" class="field-clear" data-act="sbe-task-clear" aria-label="Clear tasks field" tabindex="-1">&times;</button>' +
-          "</div>" +
-          '<div class="ac-list sbe-task-ac" hidden></div>' +
-        "</div>" +
-        '<div class="field">' +
-          '<label class="lbl"><i data-lucide="layout-grid"></i>Category</label>' +
-          '<div class="chip-row sbe-category-chips"></div>' +
-          '<div class="input-clear-wrap">' +
-            '<input type="text" class="sbe-category" placeholder="e.g. Work" value="' + escapeHtml(row.category) + '" ' +
-              'role="combobox" aria-autocomplete="list" aria-expanded="false">' +
-            '<button type="button" class="field-clear" data-act="sbe-category-clear" aria-label="Clear category field" tabindex="-1">&times;</button>' +
-          "</div>" +
-          '<div class="ac-list sbe-category-ac" hidden></div>' +
-        "</div>" +
+        scheduleBetaFormFieldsHtml("sbe", row, false) +
         '<div class="form-actions">' +
           '<button type="button" class="btn btn-ghost" data-act="sbe-cancel">Cancel</button>' +
           '<button type="button" class="btn btn-primary" data-act="sbe-save" data-idx="' + i + '"><i data-lucide="check"></i>Save</button>' +
@@ -2599,26 +2613,27 @@
       "</div>" +
     "</div>";
   }
-  // quick-pick chips for whichever row's edit form is currently open — same
-  // source data (taskCatalog/categories/chipOrder/chipHidden) as the real
-  // log form on Home, read-only here; this page never writes to any of them
-  function renderScheduleBetaEditChips(editBox) {
+  // quick-pick chips for whichever Schedule Beta form is currently open —
+  // same source data (taskCatalog/categories/chipOrder/chipHidden) as the
+  // real log form on Home, read-only here; this page never writes to any of
+  // them. prefix is "sbe" (row edit) or "sbi" (mid-list insert).
+  function renderScheduleBetaFormChips(editBox, prefix) {
     var taskNames = orderedNames(visibleNames("tasks", allTaskNames()), state.chipOrder.tasks, taskCounts());
     var catNames = orderedNames(visibleNames("categories", manageableCategories()), state.chipOrder.categories, categoryCounts());
-    editBox.querySelector(".sbe-task-chips").innerHTML = taskNames.map(function (t) {
+    editBox.querySelector("." + prefix + "-task-chips").innerHTML = taskNames.map(function (t) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(t) + '">' + escapeHtml(t) + "</button>";
     }).join("");
-    editBox.querySelector(".sbe-category-chips").innerHTML = catNames.map(function (c) {
+    editBox.querySelector("." + prefix + "-category-chips").innerHTML = catNames.map(function (c) {
       return '<button type="button" class="chip" data-name="' + escapeHtml(c) + '">' + escapeHtml(c) + "</button>";
     }).join("");
   }
   // same pattern as the home timeline's attachEditAc — wires suggestions
-  // fresh onto an edit box's task/category fields each time it's opened
-  function attachScheduleBetaEditAc(editBox) {
-    var taskEl = editBox.querySelector(".sbe-task");
-    var catEl = editBox.querySelector(".sbe-category");
-    wireCategoryAc(catEl, editBox.querySelector(".sbe-category-ac"), function (name) { catEl.value = name; });
-    wireTaskAc(taskEl, editBox.querySelector(".sbe-task-ac"), function (name, cat) {
+  // fresh onto whichever form's task/category fields each time it's opened
+  function attachScheduleBetaFormAc(editBox, prefix) {
+    var taskEl = editBox.querySelector("." + prefix + "-task");
+    var catEl = editBox.querySelector("." + prefix + "-category");
+    wireCategoryAc(catEl, editBox.querySelector("." + prefix + "-category-ac"), function (name) { catEl.value = name; });
+    wireTaskAc(taskEl, editBox.querySelector("." + prefix + "-task-ac"), function (name, cat) {
       taskEl.value = name;
       if (cat) catEl.value = cat;
     }, function () { catEl.focus(); });
@@ -2664,17 +2679,16 @@
       }).join("") +
       "</div>";
 
+    // at most one of these is ever open at once (opening either one closes
+    // the other — see the click handler), so there's only ever a single
+    // .schedulebeta-edit on the page and this lookup is unambiguous
     var editBox = box.querySelector(".schedulebeta-edit");
     if (editBox) {
-      attachTimeInput(editBox.querySelector(".sbe-time"));
-      attachScheduleBetaEditAc(editBox);
-      renderScheduleBetaEditChips(editBox);
-    }
-    var insTimeEl = box.querySelector(".schedule-ins-time");
-    if (insTimeEl) {
-      attachTimeInput(insTimeEl);
-      var insDurEl = box.querySelector(".schedule-ins-dur");
-      if (insDurEl) insDurEl.focus();
+      var prefix = scheduleBetaInsertAfter !== -1 ? "sbi" : "sbe";
+      attachTimeInput(editBox.querySelector("." + prefix + "-time"));
+      attachScheduleBetaFormAc(editBox, prefix);
+      renderScheduleBetaFormChips(editBox, prefix);
+      if (prefix === "sbi") editBox.querySelector(".sbi-dur").focus();
     }
   }
 
@@ -4317,19 +4331,82 @@
     var resetPlanBtn = ev.target.closest('[data-act="schedulebeta-reset-plan"]');
     if (resetPlanBtn) { resetScheduleBetaPlan(+resetPlanBtn.dataset.idx); return; }
     var insBtn = ev.target.closest('[data-act="schedulebeta-insert"]');
-    if (insBtn) { scheduleBetaInsertAfter = +insBtn.dataset.idx; render(); return; }
+    if (insBtn) {
+      // only one of the two forms is ever open at once — opening this one
+      // closes any row currently expanded for editing
+      scheduleBetaExpandedIdx = -1;
+      scheduleBetaInsertAfter = +insBtn.dataset.idx;
+      scheduleBetaAgoN = 0;
+      render();
+      return;
+    }
     var cancelBtn = ev.target.closest('[data-act="schedulebeta-insert-cancel"]');
     if (cancelBtn) { scheduleBetaInsertAfter = -1; render(); return; }
+    var delBtn = ev.target.closest('[data-act="schedulebeta-delete"]');
+    if (delBtn && confirm("Delete this task? Everything after it moves up to close the gap.")) {
+      deleteScheduleBetaTask(+delBtn.dataset.idx);
+      return;
+    }
+
+    // ---- fields shared by the insert form (sbi-*) and the per-row edit
+    // form (sbe-*) — handled together since they're otherwise identical ----
+    var nowBtn = ev.target.closest('[data-act="sbe-now"], [data-act="sbi-now"]');
+    if (nowBtn) {
+      var p1 = nowBtn.dataset.act.split("-")[0];
+      var nowBox = nowBtn.closest(".schedulebeta-edit");
+      nowBox.querySelector("." + p1 + "-time").value = nowHHMM();
+      scheduleBetaAgoN = 0;
+      nowBox.querySelector('[data-act="' + p1 + '-ago"]').textContent = "1 min ago";
+      return;
+    }
+    var agoBtnEl = ev.target.closest('[data-act="sbe-ago"], [data-act="sbi-ago"]');
+    if (agoBtnEl) {
+      var p2 = agoBtnEl.dataset.act.split("-")[0];
+      scheduleBetaAgoN = (scheduleBetaAgoN % 3) + 1;
+      agoBtnEl.closest(".schedulebeta-edit").querySelector("." + p2 + "-time").value = hhmmMinsAgo(scheduleBetaAgoN);
+      agoBtnEl.textContent = scheduleBetaAgoN + " min ago";
+      return;
+    }
+    var taskClearBtn = ev.target.closest('[data-act="sbe-task-clear"], [data-act="sbi-task-clear"]');
+    if (taskClearBtn) {
+      var p3 = taskClearBtn.dataset.act.split("-")[0];
+      var te = taskClearBtn.closest(".schedulebeta-edit").querySelector("." + p3 + "-task");
+      te.value = ""; te.focus();
+      return;
+    }
+    var catClearBtn = ev.target.closest('[data-act="sbe-category-clear"], [data-act="sbi-category-clear"]');
+    if (catClearBtn) {
+      var p4 = catClearBtn.dataset.act.split("-")[0];
+      var ce = catClearBtn.closest(".schedulebeta-edit").querySelector("." + p4 + "-category");
+      ce.value = ""; ce.focus();
+      return;
+    }
+    var formChip = ev.target.closest(".schedulebeta-edit .chip");
+    if (formChip) {
+      var editBoxC = formChip.closest(".schedulebeta-edit");
+      var pC = formChip.closest(".sbi-task-chips, .sbi-category-chips") ? "sbi" : "sbe";
+      if (formChip.closest("." + pC + "-task-chips")) {
+        editBoxC.querySelector("." + pC + "-task").value = formChip.dataset.name;
+        var cat = state.taskCatalog[formChip.dataset.name];
+        if (cat) editBoxC.querySelector("." + pC + "-category").value = cat;
+      } else {
+        editBoxC.querySelector("." + pC + "-category").value = formChip.dataset.name;
+      }
+      return;
+    }
+
+    // ---- the mid-list insert form's own Save (needs the duration field) ----
     var saveBtn = ev.target.closest('[data-act="schedulebeta-insert-save"]');
     if (saveBtn) {
       var afterIdx = +saveBtn.dataset.idx;
-      var form = saveBtn.closest(".schedule-insert-form");
-      var timeEl = form.querySelector(".schedule-ins-time");
-      var durEl = form.querySelector(".schedule-ins-dur");
-      var textEl = form.querySelector(".schedule-ins-text");
-      var catEl = form.querySelector(".schedule-ins-cat");
-      var t = normTime(timeEl.value);
+      var form = saveBtn.closest(".schedulebeta-edit");
+      var timeEl = form.querySelector(".sbi-time");
+      var durEl = form.querySelector(".sbi-dur");
+      var textEl = form.querySelector(".sbi-task");
+      var catEl = form.querySelector(".sbi-category");
+      var t = timeEl.value.trim() ? normTime(timeEl.value) : "";
       if (!t) { timeEl.focus(); return; }
+      if (!textEl.value.trim()) { textEl.focus(); return; }
       var dur = Math.round(parseDuration(durEl.value));
       if (!dur || dur <= 0) { durEl.focus(); return; }
       // an interrupting insert needs 2 free slots (the new task plus a
@@ -4343,52 +4420,8 @@
       insertScheduleBetaTask(afterIdx, t, dur, textEl.value, catEl.value);
       return;
     }
-    var delBtn = ev.target.closest('[data-act="schedulebeta-delete"]');
-    if (delBtn && confirm("Delete this task? Everything after it moves up to close the gap.")) {
-      deleteScheduleBetaTask(+delBtn.dataset.idx);
-      return;
-    }
 
-    // ---- the per-row expand-to-edit form ----
-    var sbeNow = ev.target.closest('[data-act="sbe-now"]');
-    if (sbeNow) {
-      var nowBox = sbeNow.closest(".schedulebeta-edit");
-      nowBox.querySelector(".sbe-time").value = nowHHMM();
-      scheduleBetaAgoN = 0;
-      nowBox.querySelector('[data-act="sbe-ago"]').textContent = "1 min ago";
-      return;
-    }
-    var sbeAgo = ev.target.closest('[data-act="sbe-ago"]');
-    if (sbeAgo) {
-      scheduleBetaAgoN = (scheduleBetaAgoN % 3) + 1;
-      sbeAgo.closest(".schedulebeta-edit").querySelector(".sbe-time").value = hhmmMinsAgo(scheduleBetaAgoN);
-      sbeAgo.textContent = scheduleBetaAgoN + " min ago";
-      return;
-    }
-    var sbeTaskClear = ev.target.closest('[data-act="sbe-task-clear"]');
-    if (sbeTaskClear) {
-      var te = sbeTaskClear.closest(".schedulebeta-edit").querySelector(".sbe-task");
-      te.value = ""; te.focus();
-      return;
-    }
-    var sbeCatClear = ev.target.closest('[data-act="sbe-category-clear"]');
-    if (sbeCatClear) {
-      var ce = sbeCatClear.closest(".schedulebeta-edit").querySelector(".sbe-category");
-      ce.value = ""; ce.focus();
-      return;
-    }
-    var sbeChip = ev.target.closest(".schedulebeta-edit .chip");
-    if (sbeChip) {
-      var editBox2 = sbeChip.closest(".schedulebeta-edit");
-      if (sbeChip.closest(".sbe-task-chips")) {
-        editBox2.querySelector(".sbe-task").value = sbeChip.dataset.name;
-        var cat = state.taskCatalog[sbeChip.dataset.name];
-        if (cat) editBox2.querySelector(".sbe-category").value = cat;
-      } else {
-        editBox2.querySelector(".sbe-category").value = sbeChip.dataset.name;
-      }
-      return;
-    }
+    // ---- the per-row expand-to-edit form's own Cancel/Save ----
     var sbeCancel = ev.target.closest('[data-act="sbe-cancel"]');
     if (sbeCancel) { scheduleBetaExpandedIdx = -1; render(); return; }
     var sbeSave = ev.target.closest('[data-act="sbe-save"]');
@@ -4408,7 +4441,12 @@
 
     // tapping the row itself (not one of the icons/actions above) opens it
     var summary = ev.target.closest(".schedulebeta-summary");
-    if (summary) { scheduleBetaExpandedIdx = +summary.dataset.idx; render(); }
+    if (summary) {
+      scheduleBetaInsertAfter = -1;
+      scheduleBetaExpandedIdx = +summary.dataset.idx;
+      scheduleBetaAgoN = 0;
+      render();
+    }
   });
 
   function updateTabbar() {
