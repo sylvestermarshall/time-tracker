@@ -799,6 +799,10 @@
   var TOKEN_KEY = "time-tracker-gh-token";
   var GIST_ID_KEY = "time-tracker-gist-id";
   var SCHEDULE_SIZE = 30;
+  // Schedule Beta starts bigger and can keep growing (its own "Add more
+  // rows" button) — the main Schedule page above stays fixed at 30
+  var SCHEDULE_BETA_MIN_SIZE = 100;
+  var SCHEDULE_BETA_GROW_BY = 50;
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
@@ -1066,15 +1070,23 @@
   // as entirely separate functions (not a parameterized shared one) and a
   // separate state.scheduleBeta array so nothing here can ever cross-affect
   // the real Schedule feature or the real logged entries.
+  function blankScheduleBetaRow() {
+    return { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() };
+  }
   function emptyScheduleBeta() {
     var out = [];
-    for (var i = 0; i < SCHEDULE_SIZE; i++) out.push({ time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() });
+    for (var i = 0; i < SCHEDULE_BETA_MIN_SIZE; i++) out.push(blankScheduleBetaRow());
     return out;
   }
+  // unlike normalizeSchedule, this never truncates — the list only grows
+  // (via the "Add more rows" button, or a longer copy synced in from
+  // elsewhere), padding up to at least SCHEDULE_BETA_MIN_SIZE but never
+  // shrinking an already-longer list back down
   function normalizeScheduleBeta(raw) {
     var arr = Array.isArray(raw) ? raw : [];
+    var size = Math.max(SCHEDULE_BETA_MIN_SIZE, arr.length);
     var out = [];
-    for (var i = 0; i < SCHEDULE_SIZE; i++) {
+    for (var i = 0; i < size; i++) {
       var r = arr[i];
       var t = r && typeof r.time === "string" ? normTime(r.time) : "";
       var planned = r && typeof r.plannedMin === "number" && isFinite(r.plannedMin) && r.plannedMin >= 0 ? Math.round(r.plannedMin) : null;
@@ -1094,10 +1106,11 @@
   }
   function mergeScheduleBeta(a, b) {
     a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
+    var size = Math.max(SCHEDULE_BETA_MIN_SIZE, a.length, b.length);
     var out = [];
-    for (var i = 0; i < SCHEDULE_SIZE; i++) {
-      var ra = a[i] || { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() };
-      var rb = b[i] || { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() };
+    for (var i = 0; i < size; i++) {
+      var ra = a[i] || blankScheduleBetaRow();
+      var rb = b[i] || blankScheduleBetaRow();
       out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
     }
     return out;
@@ -2685,7 +2698,9 @@
           (scheduleBetaInsertAfter === i ? scheduleBetaInsertFormHtml(i) : "") +
         "</div>";
       }).join("") +
-      "</div>";
+      "</div>" +
+      '<button type="button" class="btn btn-ghost" id="scheduleBetaGrowBtn" style="width:100%;margin-top:0.8rem;">' +
+        '<i data-lucide="plus"></i>Add ' + SCHEDULE_BETA_GROW_BY + ' more rows</button>';
 
     // at most one of these is ever open at once (opening either one closes
     // the other — see the click handler), so there's only ever a single
@@ -3661,6 +3676,18 @@
       return s;
     });
   }
+  // the "Add more rows" button at the bottom of the list — just appends more
+  // blank slots, no cap; normalizeScheduleBeta/mergeScheduleBeta both treat
+  // the list's current length as a floor, never shrinking it back down
+  function growScheduleBeta() {
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var extra = [];
+      for (var i = 0; i < SCHEDULE_BETA_GROW_BY; i++) extra.push(Object.assign({}, blankScheduleBetaRow(), { updatedAt: now }));
+      s.scheduleBeta = s.scheduleBeta.concat(extra);
+      return s;
+    });
+  }
   // commits a drag reorder: newOrderIdx is the dragged-to order of the
   // currently-used rows' original indices. Each row's own duration (its
   // live gap in the old order, or its frozen Plan if that's not computable)
@@ -3699,7 +3726,7 @@
       // the insert/delete fix above: a per-position merge has no idea a
       // reorder happened, so without this a device that hasn't seen it yet
       // could win the merge at some position and scramble the order back
-      s.scheduleBeta = reordered.concat(rest).slice(0, SCHEDULE_SIZE)
+      s.scheduleBeta = reordered.concat(rest)
         .map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
       syncScheduleBetaLoggedEntries(s);
       return s;
@@ -4492,6 +4519,7 @@
       resetScheduleBeta();
       return;
     }
+    if (ev.target.closest("#scheduleBetaGrowBtn")) { growScheduleBeta(); return; }
     var doneYesBtn = ev.target.closest('[data-act="schedulebeta-done-yes"]');
     if (doneYesBtn) { setScheduleBetaDone(+doneYesBtn.dataset.idx, "yes"); return; }
     var doneNoBtn = ev.target.closest('[data-act="schedulebeta-done-no"]');
@@ -4581,7 +4609,7 @@
       // "...continued" row for whatever it bumped), a normal one needs 1
       var slotsNeeded = scheduleBetaInsertInterrupts(state.scheduleBeta, afterIdx, t) ? 2 : 1;
       if (scheduleBetaFreeTailSlots() < slotsNeeded) {
-        alert("Schedule Beta doesn't have room for this (30 rows) — delete or finish a task first.");
+        alert("Schedule Beta is out of blank rows for this — tap “Add more rows” at the bottom of the list, or delete/finish a task first.");
         return;
       }
       scheduleBetaInsertAfter = -1;
