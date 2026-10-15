@@ -3428,6 +3428,49 @@
     if (!cur || !cur.time || !next || !next.time) return false;
     return hhmmToMinutes(cur.time) < hhmmToMinutes(t) && hhmmToMinutes(t) < hhmmToMinutes(next.time);
   }
+  // keeps every already-checked row's real entry matching its row's current
+  // time/duration/task/category — called after any edit, insert, delete, or
+  // reorder of scheduleBeta, so correcting a mistake in the plan (retiming a
+  // task, fixing its name, deleting it, dragging it elsewhere) corrects the
+  // real logged data too, not just that one row but every row a cascade
+  // touched along the way. Only rows that are actually checked (have a
+  // loggedEntryId) are affected; nothing here creates or clears that link —
+  // see setScheduleBetaDone for that.
+  function syncScheduleBetaLoggedEntries(s) {
+    var rows = s.scheduleBeta;
+    var dayK = todayKey();
+    var now = new Date().toISOString();
+    rows.forEach(function (row, i) {
+      if (!row.loggedEntryId) return;
+      if (!row.time) {
+        // lost its time somehow — can't stay a dated entry
+        if (s.entries.some(function (e) { return e.id === row.loggedEntryId; })) {
+          s.entries = s.entries.filter(function (e) { return e.id !== row.loggedEntryId; });
+          s.deletedIds = Object.assign({}, s.deletedIds);
+          s.deletedIds[row.loggedEntryId] = now;
+        }
+        return;
+      }
+      var liveMin = scheduleLiveDurationMin(rows, i);
+      var durMin = liveMin != null ? liveMin : row.plannedMin;
+      var startAt = makeStartAt(dayK, row.time);
+      var endAt = durMin ? makeEndAt(startAt, minutesToHHMM(hhmmToMinutes(row.time) + durMin)) : "";
+      var cat = row.category ? (findCaseInsensitive(s.categories, row.category) || row.category) : "";
+      var tsk = row.text ? (findCaseInsensitive(knownTaskNames(s), row.text) || row.text) : "";
+      var changed = false;
+      s.entries = s.entries.map(function (e) {
+        if (e.id !== row.loggedEntryId) return e;
+        if (e.startAt === startAt && e.endAt === endAt && e.task === tsk && e.category === cat) return e;
+        changed = true;
+        return Object.assign({}, e, { startAt: startAt, endAt: endAt, task: tsk, category: cat, updatedAt: now });
+      });
+      if (changed) {
+        if (cat && s.categories.indexOf(cat) < 0) s.categories.push(cat);
+        reviveChipHidden(s, "categories", cat);
+        reviveChipHidden(s, "tasks", tsk);
+      }
+    });
+  }
   // commits a row's edit-form submission (Save) — handles both filling in a
   // previously-blank row and editing an existing one identically, same as
   // updateScheduleTime does for the real Schedule page's bare inputs: if the
@@ -3457,6 +3500,7 @@
         }
       }
       s.scheduleBeta = rows;
+      syncScheduleBetaLoggedEntries(s);
       return s;
     });
   }
@@ -3499,11 +3543,16 @@
         };
       }
       s.scheduleBeta = rows;
+      syncScheduleBetaLoggedEntries(s);
       return s;
     });
   }
+  // deleting a checked row removes the real entry it logged (same as
+  // un-checking it); the pull-earlier cascade on everything after it is then
+  // resynced the same way any other edit is
   function deleteScheduleBetaTask(idx) {
     var now = new Date().toISOString();
+    var removedEntryId = (state.scheduleBeta[idx] || {}).loggedEntryId || "";
     queueMutation(function (s) {
       var rows = s.scheduleBeta.slice();
       var gap = scheduleLiveDurationMin(rows, idx) || 0;
@@ -3515,8 +3564,14 @@
           }
         }
       }
-      rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", updatedAt: now };
+      rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: now };
       s.scheduleBeta = rows;
+      if (removedEntryId) {
+        s.entries = s.entries.filter(function (e) { return e.id !== removedEntryId; });
+        s.deletedIds = Object.assign({}, s.deletedIds);
+        s.deletedIds[removedEntryId] = now;
+      }
+      syncScheduleBetaLoggedEntries(s);
       return s;
     });
   }
@@ -3626,6 +3681,7 @@
       var rest = [];
       for (var i = 0; i < rows.length; i++) { if (!moved[i]) rest.push(rows[i]); }
       s.scheduleBeta = reordered.concat(rest).slice(0, SCHEDULE_SIZE);
+      syncScheduleBetaLoggedEntries(s);
       return s;
     });
   }
