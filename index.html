@@ -3318,14 +3318,17 @@
       var nextOld = rows[afterIdx + 1] ? rows[afterIdx + 1].time : "";
       var delta = nextOld ? (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld)) : 0;
       for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
-      if (delta) {
-        for (var i = afterIdx + 2; i < rows.length; i++) {
-          if (rows[i] && rows[i].time) {
-            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
-          }
-        }
-      }
       rows[afterIdx + 1] = { time: t, text: text || "", plannedMin: dur, updatedAt: now };
+      // every row from here on just shifted into a position it wasn't in a
+      // moment ago — stamp all of them fresh (not just the ones whose time
+      // value also changed), or a later sync against a device that hasn't
+      // seen this insert yet can let its stale content at that position win
+      // the per-position merge and resurrect a row that already moved
+      for (var i = afterIdx + 2; i < rows.length; i++) {
+        var r = rows[i];
+        var tt = (delta && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) + delta) : r.time;
+        rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
+      }
       s.schedule = rows;
       return s;
     });
@@ -3338,14 +3341,15 @@
       var rows = s.schedule.slice();
       var gap = scheduleLiveDurationMin(rows, idx) || 0;
       for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
-      if (gap) {
-        for (var i = idx; i < rows.length - 1; i++) {
-          if (rows[i] && rows[i].time) {
-            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) - gap), updatedAt: now });
-          }
-        }
-      }
       rows[rows.length - 1] = { time: "", text: "", plannedMin: null, done: "", updatedAt: now };
+      // same reasoning as insertScheduleTask above: every position from idx
+      // on has shifted or been cleared, so all of them need a fresh stamp —
+      // not just the ones whose time value happened to also need adjusting
+      for (var i = idx; i < rows.length; i++) {
+        var r = rows[i];
+        var tt = (gap && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) - gap) : r.time;
+        rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
+      }
       s.schedule = rows;
       return s;
     });
@@ -3524,14 +3528,7 @@
       var delta = !nextOld ? 0 : interrupts ? dur : (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld));
 
       for (var k = rows.length - 1 - slots; k > afterIdx; k--) rows[k + slots] = rows[k];
-      if (delta) {
-        for (var i = afterIdx + 1 + slots; i < rows.length; i++) {
-          if (rows[i] && rows[i].time) {
-            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) + delta), updatedAt: now });
-          }
-        }
-      }
-      rows[afterIdx + 1] = { time: t, text: text || "", category: category || "", plannedMin: dur, done: "", updatedAt: now };
+      rows[afterIdx + 1] = { time: t, text: text || "", category: category || "", plannedMin: dur, done: "", loggedEntryId: "", updatedAt: now };
       if (interrupts) {
         rows[afterIdx + 2] = {
           time: minutesToHHMM(hhmmToMinutes(t) + dur),
@@ -3539,8 +3536,19 @@
           category: cur.category || "",
           plannedMin: remaining,
           done: "",
+          loggedEntryId: "",
           updatedAt: now
         };
+      }
+      // every row from here on just shifted into a position it wasn't in a
+      // moment ago — stamp all of them fresh (not just the ones whose time
+      // value also changed), or a later sync against a device that hasn't
+      // seen this insert yet can let its stale content at that position win
+      // the per-position merge and resurrect a row that already moved
+      for (var i = afterIdx + 1 + slots; i < rows.length; i++) {
+        var r = rows[i];
+        var tt = (delta && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) + delta) : r.time;
+        rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
       }
       s.scheduleBeta = rows;
       syncScheduleBetaLoggedEntries(s);
@@ -3557,14 +3565,20 @@
       var rows = s.scheduleBeta.slice();
       var gap = scheduleLiveDurationMin(rows, idx) || 0;
       for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
-      if (gap) {
-        for (var i = idx; i < rows.length - 1; i++) {
-          if (rows[i] && rows[i].time) {
-            rows[i] = Object.assign({}, rows[i], { time: minutesToHHMM(hhmmToMinutes(rows[i].time) - gap), updatedAt: now });
-          }
-        }
-      }
       rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: now };
+      // same reasoning as insertScheduleBetaTask above: every position from
+      // idx on has shifted or been cleared, so all of them need a fresh
+      // stamp — not just the ones whose time value happened to also change.
+      // Without this, a device that syncs before seeing this delete can
+      // have stale content at one of these positions "win" a later merge
+      // and resurrect a row that already moved or was cleared — which is
+      // exactly the "deleting one task duplicates the last task" bug this
+      // fixes.
+      for (var i = idx; i < rows.length; i++) {
+        var r = rows[i];
+        var tt = (gap && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) - gap) : r.time;
+        rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
+      }
       s.scheduleBeta = rows;
       if (removedEntryId) {
         s.entries = s.entries.filter(function (e) { return e.id !== removedEntryId; });
@@ -3680,7 +3694,13 @@
       newOrderIdx.forEach(function (idx) { moved[idx] = true; });
       var rest = [];
       for (var i = 0; i < rows.length; i++) { if (!moved[i]) rest.push(rows[i]); }
-      s.scheduleBeta = reordered.concat(rest).slice(0, SCHEDULE_SIZE);
+      // every row — reordered or not — is landing at a (possibly new)
+      // position, so all of them get a fresh stamp here, same reasoning as
+      // the insert/delete fix above: a per-position merge has no idea a
+      // reorder happened, so without this a device that hasn't seen it yet
+      // could win the merge at some position and scramble the order back
+      s.scheduleBeta = reordered.concat(rest).slice(0, SCHEDULE_SIZE)
+        .map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
       syncScheduleBetaLoggedEntries(s);
       return s;
     });
