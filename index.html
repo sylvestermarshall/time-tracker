@@ -719,9 +719,10 @@
   </div>
 
   <!-- SCHEDULE BETA: trial combo of the Home log form's UX (time/task/category
-       with chips + autocomplete) with Schedule's planning features. Entirely
-       separate data (state.scheduleBeta) — never touches entries/categories/
-       taskCatalog beyond reading them for suggestions. -->
+       with chips + autocomplete) with Schedule's planning features. One plan
+       per day (state.scheduleBetaByDate), separate from entries/categories/
+       taskCatalog beyond reading them for suggestions — except that marking
+       a row done logs a real entry (see syncScheduleBetaLoggedEntries). -->
   <div id="scheduleBetaPage" hidden>
     <div id="scheduleBetaList"></div>
   </div>
@@ -856,6 +857,10 @@
   // drag-to-reorder state for Schedule Beta's rows (see the pointer-events
   // wiring near the bottom, same approach as the Chips page's drag reorder)
   var scheduleBetaDragEl = null, scheduleBetaDragPointerId = null;
+  // which day's schedule Schedule Beta is currently showing — independent
+  // of Home/Day's own viewDate, since you might be reviewing yesterday's
+  // Schedule Beta while Home still shows today
+  var scheduleBetaViewDate = todayKey();
 
   // ---------- helpers ----------
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -1027,7 +1032,7 @@
       focusSwitches: [],
       abcNotes: [], deletedAbc: {},
       schedule: emptySchedule(),
-      scheduleBeta: emptyScheduleBeta()
+      scheduleBetaByDate: normalizeScheduleBetaByDate({}, null)
     };
   }
 
@@ -1074,25 +1079,37 @@
 
   // Schedule Beta (Menu > Schedule Beta): a trial combining the home log
   // form's entry UX with Schedule's planning features. Same row shape as
-  // Schedule plus a category, same fixed-size/positional merge rule — kept
-  // as entirely separate functions (not a parameterized shared one) and a
-  // separate state.scheduleBeta array so nothing here can ever cross-affect
-  // the real Schedule feature or the real logged entries.
+  // Schedule plus a category, same fixed-size/positional merge rule per day
+  // — kept as entirely separate functions (not a parameterized shared one)
+  // and a separate state.scheduleBetaByDate map so nothing here can ever
+  // cross-affect the real Schedule feature or the real logged entries.
+  //
+  // One schedule PER DAY (dateKey -> row array), not one eternal scratch
+  // pad: you can navigate to any date and lay out (or review) that day's
+  // plan, and an unfinished row can be pushed forward into tomorrow's list
+  // instead of being lost to Reset. A day that's in the past is normalized
+  // down to just its actual content (no padding) since you're not adding
+  // more to it; today and any future day stay padded to
+  // SCHEDULE_BETA_MIN_SIZE (or however far "Add more rows" has grown it)
+  // so there's always room to tap into.
   function blankScheduleBetaRow() {
     return { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() };
   }
-  function emptyScheduleBeta() {
+  function emptyScheduleBetaDay(size) {
     var out = [];
-    for (var i = 0; i < SCHEDULE_BETA_MIN_SIZE; i++) out.push(blankScheduleBetaRow());
+    for (var i = 0; i < (size || SCHEDULE_BETA_MIN_SIZE); i++) out.push(blankScheduleBetaRow());
     return out;
   }
-  // unlike normalizeSchedule, this never truncates — the list only grows
-  // (via the "Add more rows" button, or a longer copy synced in from
-  // elsewhere), padding up to at least SCHEDULE_BETA_MIN_SIZE but never
-  // shrinking an already-longer list back down
-  function normalizeScheduleBeta(raw) {
+  function normalizeScheduleBetaDay(raw, dayK) {
     var arr = Array.isArray(raw) ? raw : [];
-    var size = Math.max(SCHEDULE_BETA_MIN_SIZE, arr.length);
+    var lastUsed = -1;
+    for (var k = 0; k < arr.length; k++) {
+      var rk = arr[k];
+      if (rk && (rk.time || rk.text)) lastUsed = k;
+    }
+    var isPast = dayK < todayKey();
+    var floor = isPast ? 0 : Math.max(SCHEDULE_BETA_MIN_SIZE, arr.length);
+    var size = Math.max(floor, lastUsed + 1);
     var out = [];
     for (var i = 0; i < size; i++) {
       var r = arr[i];
@@ -1112,16 +1129,56 @@
     }
     return out;
   }
-  function mergeScheduleBeta(a, b) {
+  function mergeScheduleBetaDayRows(a, b, dayK) {
     a = Array.isArray(a) ? a : []; b = Array.isArray(b) ? b : [];
-    var size = Math.max(SCHEDULE_BETA_MIN_SIZE, a.length, b.length);
+    var size = Math.max(a.length, b.length);
     var out = [];
     for (var i = 0; i < size; i++) {
       var ra = a[i] || blankScheduleBetaRow();
       var rb = b[i] || blankScheduleBetaRow();
       out.push(new Date(ra.updatedAt) >= new Date(rb.updatedAt) ? ra : rb);
     }
+    return normalizeScheduleBetaDay(out, dayK);
+  }
+  // raw.scheduleBeta is the pre-dates-feature single flat array; if there's
+  // no scheduleBetaByDate yet (an old synced copy), it migrates straight
+  // into today's slot so nobody's in-progress plan vanishes on upgrade
+  function normalizeScheduleBetaByDate(raw, legacyFlat) {
+    var obj = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+    var out = {};
+    Object.keys(obj).forEach(function (dayK) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayK)) return;
+      out[dayK] = normalizeScheduleBetaDay(obj[dayK], dayK);
+    });
+    var today = todayKey();
+    if (!out[today]) {
+      out[today] = normalizeScheduleBetaDay(Array.isArray(legacyFlat) ? legacyFlat : [], today);
+    }
     return out;
+  }
+  function mergeScheduleBetaByDate(a, b) {
+    a = (a && typeof a === "object") ? a : {};
+    b = (b && typeof b === "object") ? b : {};
+    var dayKeys = uniq(Object.keys(a).concat(Object.keys(b)));
+    var out = {};
+    dayKeys.forEach(function (dayK) {
+      out[dayK] = mergeScheduleBetaDayRows(a[dayK], b[dayK], dayK);
+    });
+    return out;
+  }
+  // reads whichever day's rows, defaulting to a fresh blank day if that date
+  // has never been touched (e.g. jumping straight to a future date)
+  function scheduleBetaRows(s, dayK) {
+    return (s.scheduleBetaByDate && s.scheduleBetaByDate[dayK]) || normalizeScheduleBetaDay([], dayK);
+  }
+  // writes a day's rows back, copying the outer map first (never mutate
+  // s.scheduleBetaByDate itself — other code may still hold the old one)
+  function setScheduleBetaRows(s, dayK, rows) {
+    s.scheduleBetaByDate = Object.assign({}, s.scheduleBetaByDate);
+    s.scheduleBetaByDate[dayK] = rows;
+  }
+  function scheduleBetaTomorrowKey(dayK) {
+    return dateKey(new Date(keyToDate(dayK).getTime() + 86400000));
   }
 
   // tombstones so a delete on one device isn't undone by a merge with another
@@ -1310,7 +1367,7 @@
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
       schedule: normalizeSchedule(raw.schedule),
-      scheduleBeta: normalizeScheduleBeta(raw.scheduleBeta)
+      scheduleBetaByDate: normalizeScheduleBetaByDate(raw.scheduleBetaByDate, raw.scheduleBeta)
     };
   }
 
@@ -1407,7 +1464,7 @@
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
       schedule: mergeSchedule(a.schedule, b.schedule),
-      scheduleBeta: mergeScheduleBeta(a.scheduleBeta, b.scheduleBeta)
+      scheduleBetaByDate: mergeScheduleBetaByDate(a.scheduleBetaByDate, b.scheduleBetaByDate)
     });
   }
 
@@ -2630,7 +2687,7 @@
   // the mid-list "insert a task after this row" form — same rich fields as
   // the per-row edit form, plus the duration the plain edit doesn't need
   function scheduleBetaInsertFormHtml(afterIdx) {
-    var displaced = state.scheduleBeta[afterIdx + 1];
+    var displaced = scheduleBetaRows(state, scheduleBetaViewDate)[afterIdx + 1];
     return '<div class="schedule-row-wrap">' +
       '<div class="panel schedulebeta-edit" data-idx="' + afterIdx + '">' +
         '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>' +
@@ -2684,18 +2741,28 @@
   function renderScheduleBetaPage() {
     document.getElementById("pageTitle").textContent = "Schedule Beta";
     var box = document.getElementById("scheduleBetaList");
+    var dayK = scheduleBetaViewDate;
+    var rows = scheduleBetaRows(state, dayK);
+    var rel = relLabel(dayK);
+    var nice = keyToDate(dayK).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    var dateLabelHtml = escapeHtml(nice) + (rel ? ' <span class="rel">' + escapeHtml(rel) + "</span>" : "");
     box.innerHTML =
-      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
-        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaHistoryBtn"><i data-lucide="history"></i>History</button>' +
-        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset</button>' +
+      '<div class="daynav">' +
+        '<button type="button" class="iconbtn" id="sbDayPrev" aria-label="Previous day"><i data-lucide="chevron-left"></i></button>' +
+        '<span class="date-label">' + dateLabelHtml + "</span>" +
+        '<input type="date" id="sbDayPicker" value="' + dayK + '">' +
+        '<button type="button" class="iconbtn" id="sbDayNext" aria-label="Next day"><i data-lucide="chevron-right"></i></button>' +
       "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with today’s date and however long it actually took, same as typing it into Home. <b>History</b> opens the day view (same prev/next day and date picker as the Day page) to see what actually got logged on any given day.</p>' +
+      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset this day</button>' +
+      "</div>" +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan instead of losing it to Reset. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
       '<div class="schedule-head">' +
         '<span class="sp-time"></span><span class="sp-text"></span>' +
         '<span class="sp-dur">Plan → Actual</span>' +
       "</div>" +
       '<div class="schedule-rows">' +
-      state.scheduleBeta.map(function (row, i) {
+      rows.map(function (row, i) {
         if (scheduleBetaExpandedIdx === i) return scheduleBetaEditFormHtml(row, i);
         var used = !!(row.time || row.text);
         return '<div class="schedule-row-wrap">' +
@@ -2705,8 +2772,12 @@
             '<span class="schedulebeta-summary-time">' + (row.time ? escapeHtml(row.time) : "--:--") + "</span>" +
             '<span class="schedulebeta-summary-text">' + (row.text ? escapeHtml(row.text) : "Tap to add a task") + "</span>" +
             (row.category ? '<span class="schedulebeta-cat">' + escapeHtml(row.category) + "</span>" : "") +
-            scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(state.scheduleBeta, i)) +
+            scheduleBetaDurGroupHtml(row, i, scheduleLiveDurationMin(rows, i)) +
             (used ? '<div class="schedule-row-actions">' +
+              (row.done !== "yes" ?
+                '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-push-tomorrow" data-idx="' + i + '" ' +
+                  'aria-label="Push row ' + (i + 1) + ' to tomorrow" title="Didn’t get to it — push to tomorrow"><i data-lucide="arrow-right"></i></button>'
+                : "") +
               '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
                 'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
               '<button type="button" class="schedule-icon-btn danger" data-act="schedulebeta-delete" data-idx="' + i + '" ' +
@@ -3463,18 +3534,21 @@
   }
 
   // ---------- schedule beta mutations ----------
-  // true if the last slot is already in use — same guard as scheduleIsFull,
-  // against scheduleBeta instead
+  // true if the last slot of the currently-viewed day is already in use —
+  // same guard as scheduleIsFull, against that day's scheduleBeta rows
   function scheduleBetaIsFull() {
-    var last = state.scheduleBeta[state.scheduleBeta.length - 1];
+    var rows = scheduleBetaRows(state, scheduleBetaViewDate);
+    var last = rows[rows.length - 1];
     return !!(last.time || last.text);
   }
-  // how many blank slots are free at the end of the list — insertScheduleTask
-  // only ever needs 1, but an interrupting insert (see below) needs 2
+  // how many blank slots are free at the end of the currently-viewed day's
+  // list — insertScheduleTask only ever needs 1, but an interrupting insert
+  // (see below) needs 2
   function scheduleBetaFreeTailSlots() {
+    var rows = scheduleBetaRows(state, scheduleBetaViewDate);
     var n = 0;
-    for (var i = state.scheduleBeta.length - 1; i >= 0; i--) {
-      if (state.scheduleBeta[i].time || state.scheduleBeta[i].text) break;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].time || rows[i].text) break;
       n++;
     }
     return n;
@@ -3490,15 +3564,16 @@
   }
   // keeps every already-checked row's real entry matching its row's current
   // time/duration/task/category — called after any edit, insert, delete, or
-  // reorder of scheduleBeta, so correcting a mistake in the plan (retiming a
-  // task, fixing its name, deleting it, dragging it elsewhere) corrects the
-  // real logged data too, not just that one row but every row a cascade
-  // touched along the way. Only rows that are actually checked (have a
-  // loggedEntryId) are affected; nothing here creates or clears that link —
-  // see setScheduleBetaDone for that.
-  function syncScheduleBetaLoggedEntries(s) {
-    var rows = s.scheduleBeta;
-    var dayK = todayKey();
+  // reorder of a day's scheduleBeta rows, so correcting a mistake in the
+  // plan (retiming a task, fixing its name, deleting it, dragging it
+  // elsewhere) corrects the real logged data too, not just that one row but
+  // every row a cascade touched along the way. Only rows that are actually
+  // checked (have a loggedEntryId) are affected; nothing here creates or
+  // clears that link — see setScheduleBetaDone for that. dayK is whichever
+  // day these rows belong to (entries log against that date, not always
+  // today, now that each day has its own plan).
+  function syncScheduleBetaLoggedEntries(s, dayK) {
+    var rows = s.scheduleBetaByDate[dayK];
     var now = new Date().toISOString();
     rows.forEach(function (row, i) {
       if (!row.loggedEntryId) return;
@@ -3538,10 +3613,11 @@
   // if it did, every later row with a time shifts by the same delta. Also
   // carries the same Plan freeze/backfill rule as updateScheduleTime.
   function saveScheduleBetaRow(idx, t, text, category) {
-    var before = (state.scheduleBeta[idx] || {}).time || "";
+    var dayK = scheduleBetaViewDate;
+    var before = (scheduleBetaRows(state, dayK)[idx] || {}).time || "";
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      var rows = s.scheduleBeta.slice();
+      var rows = scheduleBetaRows(s, dayK).slice();
       rows[idx] = Object.assign({}, rows[idx], { time: t, text: text || "", category: category || "", updatedAt: now });
       if (before && t) {
         var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
@@ -3559,8 +3635,8 @@
           rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
         }
       }
-      s.scheduleBeta = rows;
-      syncScheduleBetaLoggedEntries(s);
+      setScheduleBetaRows(s, dayK, rows);
+      syncScheduleBetaLoggedEntries(s, dayK);
       return s;
     });
   }
@@ -3573,9 +3649,10 @@
   // everything after is just the new task's own duration — the continued
   // row absorbs the rest, it isn't extra new time.
   function insertScheduleBetaTask(afterIdx, t, dur, text, category) {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      var rows = s.scheduleBeta.slice();
+      var rows = scheduleBetaRows(s, dayK).slice();
       var cur = rows[afterIdx];
       var nextOld = rows[afterIdx + 1] ? rows[afterIdx + 1].time : "";
       var interrupts = scheduleBetaInsertInterrupts(rows, afterIdx, t);
@@ -3606,8 +3683,8 @@
         var tt = (delta && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) + delta) : r.time;
         rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
       }
-      s.scheduleBeta = rows;
-      syncScheduleBetaLoggedEntries(s);
+      setScheduleBetaRows(s, dayK, rows);
+      syncScheduleBetaLoggedEntries(s, dayK);
       return s;
     });
   }
@@ -3615,10 +3692,11 @@
   // un-checking it); the pull-earlier cascade on everything after it is then
   // resynced the same way any other edit is
   function deleteScheduleBetaTask(idx) {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
-    var removedEntryId = (state.scheduleBeta[idx] || {}).loggedEntryId || "";
+    var removedEntryId = (scheduleBetaRows(state, dayK)[idx] || {}).loggedEntryId || "";
     queueMutation(function (s) {
-      var rows = s.scheduleBeta.slice();
+      var rows = scheduleBetaRows(s, dayK).slice();
       var gap = scheduleLiveDurationMin(rows, idx) || 0;
       for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
       rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: now };
@@ -3635,13 +3713,51 @@
         var tt = (gap && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) - gap) : r.time;
         rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
       }
-      s.scheduleBeta = rows;
+      setScheduleBetaRows(s, dayK, rows);
       if (removedEntryId) {
         s.entries = s.entries.filter(function (e) { return e.id !== removedEntryId; });
         s.deletedIds = Object.assign({}, s.deletedIds);
         s.deletedIds[removedEntryId] = now;
       }
-      syncScheduleBetaLoggedEntries(s);
+      syncScheduleBetaLoggedEntries(s, dayK);
+      return s;
+    });
+  }
+  // the row at idx hasn't been done — carry it into tomorrow's plan instead
+  // of losing it to Reset: closes today's gap the same way delete does, then
+  // drops the task (text + category only; time/Plan/done reset — tomorrow's
+  // timeline is its own, not an assumption this slot is still free) into the
+  // first open slot on tomorrow's list, growing it if it's already full
+  function pushScheduleBetaRowToTomorrow(idx) {
+    var dayK = scheduleBetaViewDate;
+    var nextDayK = scheduleBetaTomorrowKey(dayK);
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = scheduleBetaRows(s, dayK).slice();
+      var row = rows[idx];
+      if (!row || row.done === "yes") return s;
+      var gap = scheduleLiveDurationMin(rows, idx) || 0;
+      for (var p = idx; p < rows.length - 1; p++) rows[p] = rows[p + 1];
+      rows[rows.length - 1] = { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: now };
+      for (var i = idx; i < rows.length; i++) {
+        var r = rows[i];
+        var tt = (gap && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) - gap) : r.time;
+        rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
+      }
+      setScheduleBetaRows(s, dayK, rows);
+      syncScheduleBetaLoggedEntries(s, dayK);
+
+      var tomorrowRows = scheduleBetaRows(s, nextDayK).slice();
+      var freeIdx = -1;
+      for (var j = 0; j < tomorrowRows.length; j++) {
+        if (!tomorrowRows[j].time && !tomorrowRows[j].text) { freeIdx = j; break; }
+      }
+      if (freeIdx === -1) { freeIdx = tomorrowRows.length; tomorrowRows.push(blankScheduleBetaRow()); }
+      tomorrowRows[freeIdx] = {
+        time: "", text: row.text, category: row.category,
+        plannedMin: null, done: "", loggedEntryId: "", updatedAt: now
+      };
+      setScheduleBetaRows(s, nextDayK, tomorrowRows);
       return s;
     });
   }
@@ -3655,30 +3771,31 @@
   // mis-tap doesn't leave a stray record behind. Marking "no" when it was
   // never "yes" logs nothing, same as before.
   function setScheduleBetaDone(idx, val) {
-    var cur = (state.scheduleBeta[idx] || {}).done || "";
+    var dayK = scheduleBetaViewDate;
+    var cur = (scheduleBetaRows(state, dayK)[idx] || {}).done || "";
     var next = cur === val ? "" : val;
     var now = new Date().toISOString();
-    var row = state.scheduleBeta[idx];
+    var row = scheduleBetaRows(state, dayK)[idx];
     var turningOn = val === "yes" && next === "yes" && !!(row && row.time);
     var turningOff = cur === "yes" && next !== "yes";
     var newEntryId = turningOn ? uid() : "";
     var entryIdToRemove = turningOff ? (row.loggedEntryId || "") : "";
     var endHHMM = "";
     if (turningOn) {
-      var liveMin = scheduleLiveDurationMin(state.scheduleBeta, idx);
+      var liveMin = scheduleLiveDurationMin(scheduleBetaRows(state, dayK), idx);
       var durMin = liveMin != null ? liveMin : row.plannedMin;
       if (durMin) endHHMM = minutesToHHMM(hhmmToMinutes(row.time) + durMin);
     }
     queueMutation(function (s) {
-      var rows = s.scheduleBeta.slice();
+      var rows = scheduleBetaRows(s, dayK).slice();
       rows[idx] = Object.assign({}, rows[idx], {
         done: next,
         loggedEntryId: turningOn ? newEntryId : (turningOff ? "" : rows[idx].loggedEntryId),
         updatedAt: now
       });
-      s.scheduleBeta = rows;
+      setScheduleBetaRows(s, dayK, rows);
       if (turningOn) {
-        var startAt = makeStartAt(todayKey(), row.time);
+        var startAt = makeStartAt(dayK, row.time);
         var endAt = endHHMM ? makeEndAt(startAt, endHHMM) : "";
         var cat = row.category ? (findCaseInsensitive(s.categories, row.category) || row.category) : "";
         var tsk = row.text ? (findCaseInsensitive(knownTaskNames(s), row.text) || row.text) : "";
@@ -3701,46 +3818,55 @@
     if (next === "yes") playDoneChime();
   }
   function resetScheduleBetaPlan(idx) {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      var rows = s.scheduleBeta.slice();
+      var rows = scheduleBetaRows(s, dayK).slice();
       var live = scheduleLiveDurationMin(rows, idx);
       if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
-      s.scheduleBeta = rows;
+      setScheduleBetaRows(s, dayK, rows);
       return s;
     });
   }
+  // clears just the currently-viewed day's plan — other days (including
+  // anything already pushed forward into tomorrow) are untouched, and this
+  // never touches real entries either way (see syncScheduleBetaLoggedEntries
+  // for the only thing that does)
   function resetScheduleBeta() {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      s.scheduleBeta = emptyScheduleBeta().map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
+      setScheduleBetaRows(s, dayK, emptyScheduleBetaDay().map(function (r) { return Object.assign({}, r, { updatedAt: now }); }));
       return s;
     });
   }
   // the "Add more rows" button at the bottom of the list — just appends more
-  // blank slots, no cap; normalizeScheduleBeta/mergeScheduleBeta both treat
-  // the list's current length as a floor, never shrinking it back down
+  // blank slots to the currently-viewed day, no cap; normalizeScheduleBetaDay
+  // treats a day's current length as a floor (for today/future days), never
+  // shrinking it back down
   function growScheduleBeta() {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
     queueMutation(function (s) {
       var extra = [];
       for (var i = 0; i < SCHEDULE_BETA_GROW_BY; i++) extra.push(Object.assign({}, blankScheduleBetaRow(), { updatedAt: now }));
-      s.scheduleBeta = s.scheduleBeta.concat(extra);
+      setScheduleBetaRows(s, dayK, scheduleBetaRows(s, dayK).concat(extra));
       return s;
     });
   }
-  // commits a drag reorder: newOrderIdx is the dragged-to order of the
-  // currently-used rows' original indices. Each row's own duration (its
-  // live gap in the old order, or its frozen Plan if that's not computable)
-  // travels with it — the block's size doesn't change, only where it sits —
-  // and the whole chain re-times itself starting from the first row's own
-  // (unchanged) clock time, each row starting right as the one before it
-  // ends. Rows not in newOrderIdx (the blanks) just fill in after, in their
-  // original relative order.
+  // commits a drag reorder (within the currently-viewed day): newOrderIdx is
+  // the dragged-to order of the currently-used rows' original indices. Each
+  // row's own duration (its live gap in the old order, or its frozen Plan if
+  // that's not computable) travels with it — the block's size doesn't
+  // change, only where it sits — and the whole chain re-times itself
+  // starting from the first row's own (unchanged) clock time, each row
+  // starting right as the one before it ends. Rows not in newOrderIdx (the
+  // blanks) just fill in after, in their original relative order.
   function reorderScheduleBeta(newOrderIdx) {
+    var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
     queueMutation(function (s) {
-      var rows = s.scheduleBeta;
+      var rows = scheduleBetaRows(s, dayK);
       var anchorTime = rows[newOrderIdx[0]] ? rows[newOrderIdx[0]].time : "";
       var reordered;
       if (!anchorTime) {
@@ -3767,9 +3893,9 @@
       // the insert/delete fix above: a per-position merge has no idea a
       // reorder happened, so without this a device that hasn't seen it yet
       // could win the merge at some position and scramble the order back
-      s.scheduleBeta = reordered.concat(rest)
-        .map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
-      syncScheduleBetaLoggedEntries(s);
+      setScheduleBetaRows(s, dayK, reordered.concat(rest)
+        .map(function (r) { return Object.assign({}, r, { updatedAt: now }); }));
+      syncScheduleBetaLoggedEntries(s, dayK);
       return s;
     });
   }
@@ -4556,12 +4682,25 @@
     // plain click on it (e.g. a tap with no movement) shouldn't also expand
     // the row for editing
     if (ev.target.closest(".schedulebeta-drag")) return;
-    if (ev.target.closest("#scheduleBetaHistoryBtn")) { goToDay(todayKey()); return; }
-    if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear the whole trial schedule? This can't be undone.")) {
+    if (ev.target.closest("#sbDayPrev")) {
+      scheduleBetaViewDate = dateKey(new Date(keyToDate(scheduleBetaViewDate).getTime() - 86400000));
+      scheduleBetaExpandedIdx = -1; scheduleBetaInsertAfter = -1;
+      render();
+      return;
+    }
+    if (ev.target.closest("#sbDayNext")) {
+      scheduleBetaViewDate = scheduleBetaTomorrowKey(scheduleBetaViewDate);
+      scheduleBetaExpandedIdx = -1; scheduleBetaInsertAfter = -1;
+      render();
+      return;
+    }
+    if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear this day's schedule? This can't be undone.")) {
       resetScheduleBeta();
       return;
     }
     if (ev.target.closest("#scheduleBetaGrowBtn")) { growScheduleBeta(); return; }
+    var pushTomorrowBtn = ev.target.closest('[data-act="schedulebeta-push-tomorrow"]');
+    if (pushTomorrowBtn) { pushScheduleBetaRowToTomorrow(+pushTomorrowBtn.dataset.idx); return; }
     var doneYesBtn = ev.target.closest('[data-act="schedulebeta-done-yes"]');
     if (doneYesBtn) { setScheduleBetaDone(+doneYesBtn.dataset.idx, "yes"); return; }
     var doneNoBtn = ev.target.closest('[data-act="schedulebeta-done-no"]');
@@ -4649,7 +4788,7 @@
       if (!dur || dur <= 0) { durEl.focus(); return; }
       // an interrupting insert needs 2 free slots (the new task plus a
       // "...continued" row for whatever it bumped), a normal one needs 1
-      var slotsNeeded = scheduleBetaInsertInterrupts(state.scheduleBeta, afterIdx, t) ? 2 : 1;
+      var slotsNeeded = scheduleBetaInsertInterrupts(scheduleBetaRows(state, scheduleBetaViewDate), afterIdx, t) ? 2 : 1;
       if (scheduleBetaFreeTailSlots() < slotsNeeded) {
         alert("Schedule Beta is out of blank rows for this — tap “Add more rows” at the bottom of the list, or delete/finish a task first.");
         return;
@@ -4685,6 +4824,13 @@
       scheduleBetaAgoN = 0;
       render();
     }
+  });
+  scheduleBetaList.addEventListener("change", function (ev) {
+    var picker = ev.target.closest("#sbDayPicker");
+    if (!picker || !/^\d{4}-\d{2}-\d{2}$/.test(picker.value)) return;
+    scheduleBetaViewDate = picker.value;
+    scheduleBetaExpandedIdx = -1; scheduleBetaInsertAfter = -1;
+    render();
   });
 
   // ---------- schedule beta: drag reorder ----------
