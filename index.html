@@ -867,6 +867,8 @@
   // drag-to-reorder state for Schedule Beta's rows (see the pointer-events
   // wiring near the bottom, same approach as the Chips page's drag reorder)
   var scheduleBetaDragEl = null, scheduleBetaDragPointerId = null;
+  // last category picked in the quick-add "Later" box, so a run of tasks keeps it
+  var scheduleBetaLaterCat = "";
   // which day's schedule Schedule Beta is currently showing — independent
   // of Home/Day's own viewDate, since you might be reviewing yesterday's
   // Schedule Beta while Home still shows today
@@ -1186,7 +1188,16 @@
   // s.scheduleBetaByDate itself — other code may still hold the old one)
   function setScheduleBetaRows(s, dayK, rows) {
     s.scheduleBetaByDate = Object.assign({}, s.scheduleBetaByDate);
-    s.scheduleBetaByDate[dayK] = rows;
+    // "Later" tasks (a name but no time yet) always sit after the last timed
+    // row and before the blanks, so the timeline stays contiguous. Anything
+    // that lands in a different position gets a fresh stamp for the
+    // per-position merge, same as an insert/delete/reorder.
+    var now = new Date().toISOString();
+    var timed = [], later = [], blank = [];
+    rows.forEach(function (r) { (r.time ? timed : r.text ? later : blank).push(r); });
+    s.scheduleBetaByDate[dayK] = timed.concat(later, blank).map(function (r, i) {
+      return r === rows[i] ? r : Object.assign({}, r, { updatedAt: now });
+    });
   }
   function scheduleBetaTomorrowKey(dayK) {
     return dateKey(new Date(keyToDate(dayK).getTime() + 86400000));
@@ -2792,27 +2803,12 @@
     var rel = relLabel(dayK);
     var nice = keyToDate(dayK).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
     var dateLabelHtml = escapeHtml(nice) + (rel ? ' <span class="rel">' + escapeHtml(rel) + "</span>" : "");
-    box.innerHTML =
-      '<div class="daynav">' +
-        '<button type="button" class="iconbtn" id="sbDayPrev" aria-label="Previous day"><i data-lucide="chevron-left"></i></button>' +
-        '<span class="date-label">' + dateLabelHtml + "</span>" +
-        '<input type="date" id="sbDayPicker" value="' + dayK + '">' +
-        '<button type="button" class="iconbtn" id="sbDayNext" aria-label="Next day"><i data-lucide="chevron-right"></i></button>' +
-      "</div>" +
-      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
-        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset this day</button>' +
-      "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan instead of losing it to Reset. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
-      '<div class="schedule-head">' +
-        '<span class="sp-time"></span><span class="sp-text"></span>' +
-        '<span class="sp-dur">Plan → Actual</span>' +
-      "</div>" +
-      '<div class="schedule-rows">' +
-      rows.map(function (row, i) {
+    var rowHtml = function (row, i) {
         if (scheduleBetaExpandedIdx === i) return scheduleBetaEditFormHtml(row, i);
         var used = !!(row.time || row.text);
+        var untimed = used && !row.time;
         return '<div class="schedule-row-wrap">' +
-          '<div class="schedulebeta-summary' + (used ? "" : " empty") + '" data-idx="' + i + '" role="button" tabindex="0" ' +
+          '<div class="schedulebeta-summary' + (used ? "" : " empty") + '"' + (untimed ? " data-untimed" : "") + ' data-idx="' + i + '" role="button" tabindex="0" ' +
             'aria-label="Row ' + (i + 1) + (used ? ", edit" : ", tap to add a task") + '">' +
             (used ? '<button type="button" class="goal-move schedulebeta-drag" aria-label="Drag to reorder" title="Drag to reorder"><i data-lucide="grip-vertical"></i></button>' : "") +
             '<span class="schedulebeta-summary-time">' + (row.time ? escapeHtml(row.time) : "--:--") + "</span>" +
@@ -2824,22 +2820,50 @@
                 '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-push-tomorrow" data-idx="' + i + '" ' +
                   'aria-label="Push row ' + (i + 1) + ' to tomorrow" title="Didn’t get to it — push to tomorrow"><i data-lucide="arrow-right"></i></button>'
                 : "") +
-              '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
-                'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
+              (untimed ? "" : '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
+                'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>') +
               '<button type="button" class="schedule-icon-btn danger" data-act="schedulebeta-delete" data-idx="' + i + '" ' +
                 'aria-label="Delete row ' + (i + 1) + '" title="Delete task"><i data-lucide="trash-2"></i></button>' +
+              (untimed ? "" :
               '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
                 'data-act="schedulebeta-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
                 'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
               '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
                 'data-act="schedulebeta-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
-                'title="Done on time"><i data-lucide="check"></i></button>' +
+                'title="Done on time"><i data-lucide="check"></i></button>') +
             "</div>" : "") +
           "</div>" +
           (scheduleBetaInsertAfter === i ? scheduleBetaInsertFormHtml(i) : "") +
         "</div>";
-      }).join("") +
+    };
+    var pick = function (pred) { return rows.map(function (r, i) { return pred(r) ? rowHtml(r, i) : ""; }).join(""); };
+    var hasLater = rows.some(function (r) { return !r.time && r.text; });
+    box.innerHTML =
+      '<div class="daynav">' +
+        '<button type="button" class="iconbtn" id="sbDayPrev" aria-label="Previous day"><i data-lucide="chevron-left"></i></button>' +
+        '<span class="date-label">' + dateLabelHtml + "</span>" +
+        '<input type="date" id="sbDayPicker" value="' + dayK + '">' +
+        '<button type="button" class="iconbtn" id="sbDayNext" aria-label="Next day"><i data-lucide="chevron-right"></i></button>' +
       "</div>" +
+      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
+        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset this day</button>' +
+      "</div>" +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan instead of losing it to Reset. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
+      '<div class="time-wrap" style="margin-bottom:0.9rem;">' +
+        '<input type="text" id="sbLaterInput" placeholder="Add a task for later — no time needed" autocomplete="off" aria-label="Add a task for later">' +
+        '<select id="sbLaterCat" aria-label="Category for the later task"><option value="">No category</option>' +
+          state.categories.map(function (c) { return '<option value="' + escapeHtml(c) + '"' + (c === scheduleBetaLaterCat ? " selected" : "") + ">" + escapeHtml(c) + "</option>"; }).join("") +
+        "</select>" +
+        '<button type="button" class="btn btn-ghost btn-small" id="sbLaterAddBtn"><i data-lucide="plus"></i>Later</button>' +
+      "</div>" +
+      '<div class="schedule-head">' +
+        '<span class="sp-time"></span><span class="sp-text"></span>' +
+        '<span class="sp-dur">Plan → Actual</span>' +
+      "</div>" +
+      '<div class="schedule-rows sb-timed">' + pick(function (r) { return !!r.time; }) + "</div>" +
+      (hasLater ? '<p class="goals-intro" style="margin:1.1rem 0 0.4rem;"><b>Later</b> — no time yet. Type a time to slot a task into the timeline, or drag it up into it.</p>' +
+        '<div class="schedule-rows sb-later">' + pick(function (r) { return !r.time && r.text; }) + "</div>" : "") +
+      '<div class="schedule-rows sb-blank" style="margin-top:0.5rem;">' + pick(function (r) { return !r.time && !r.text; }) + "</div>" +
       '<button type="button" class="btn btn-ghost" id="scheduleBetaGrowBtn" style="width:100%;margin-top:0.8rem;">' +
         '<i data-lucide="plus"></i>Add ' + SCHEDULE_BETA_GROW_BY + ' more rows</button>';
 
@@ -3681,6 +3705,15 @@
     queueMutation(function (s) {
       var rows = scheduleBetaRows(s, dayK).slice();
       rows[idx] = Object.assign({}, rows[idx], { time: t, text: text || "", category: category || "", updatedAt: now });
+      if (!before && t) {
+        // a "Later" task just got a time — move it into its chronological
+        // place among the timed rows instead of leaving it at the tail
+        var moving = rows.splice(idx, 1)[0];
+        var at = 0;
+        while (at < rows.length && rows[at].time && hhmmToMinutes(rows[at].time) <= hhmmToMinutes(t)) at++;
+        rows.splice(at, 0, moving);
+        idx = at;
+      }
       if (before && t) {
         var delta = hhmmToMinutes(t) - hhmmToMinutes(before);
         if (delta) {
@@ -3691,7 +3724,7 @@
           }
         }
       }
-      rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
+      if (t) rows[idx] = Object.assign({}, rows[idx], { plannedMin: scheduleLiveDurationMin(rows, idx) });
       for (var j = 0; j < rows.length - 1; j++) {
         if (rows[j].plannedMin == null && rows[j].time && rows[j + 1].time) {
           rows[j] = Object.assign({}, rows[j], { plannedMin: scheduleLiveDurationMin(rows, j), updatedAt: now });
@@ -3879,6 +3912,22 @@
     });
     if (next === "yes") playDoneChime();
   }
+  // quick-add a "Later" task: just a name, no time. Takes the first blank
+  // slot (growing the day if full); setScheduleBetaRows then keeps it after
+  // the last timed row
+  function addScheduleBetaLater(text, category) {
+    var dayK = scheduleBetaViewDate;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = scheduleBetaRows(s, dayK).slice();
+      var free = -1;
+      for (var i = 0; i < rows.length; i++) { if (!rows[i].time && !rows[i].text) { free = i; break; } }
+      if (free === -1) { free = rows.length; rows.push(blankScheduleBetaRow()); }
+      rows[free] = { time: "", text: text, category: category || "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: now };
+      setScheduleBetaRows(s, dayK, rows);
+      return s;
+    });
+  }
   function resetScheduleBetaPlan(idx) {
     var dayK = scheduleBetaViewDate;
     var now = new Date().toISOString();
@@ -3939,10 +3988,18 @@
           var live = scheduleLiveDurationMin(rows, idx);
           return live != null ? live : (rows[idx].plannedMin || 0);
         });
+        // only chain through the last row that was already timed — "Later"
+        // tasks left after it stay untimed, ones dragged above it get
+        // scheduled right where they were dropped
+        var lastTimedPos = -1;
+        newOrderIdx.forEach(function (idx, pos) { if (rows[idx].time) lastTimedPos = pos; });
         var t = anchorTime;
         reordered = newOrderIdx.map(function (idx, pos) {
+          if (pos > lastTimedPos) return rows[idx];
           var r = Object.assign({}, rows[idx], { time: t, updatedAt: now });
-          t = minutesToHHMM(hhmmToMinutes(t) + durations[pos]);
+          var d = rows[idx].time ? durations[pos]
+            : (rows[idx].plannedMin || state.taskDefaultDur[taskKey(rows[idx].category || "", rows[idx].text)] || 15);
+          t = minutesToHHMM(hhmmToMinutes(t) + d);
           return r;
         });
       }
@@ -4777,6 +4834,13 @@
       return;
     }
     if (ev.target.closest("#scheduleBetaGrowBtn")) { growScheduleBeta(); return; }
+    if (ev.target.closest("#sbLaterAddBtn")) {
+      var laterEl = document.getElementById("sbLaterInput");
+      if (!laterEl.value.trim()) { laterEl.focus(); return; }
+      scheduleBetaLaterCat = document.getElementById("sbLaterCat").value;
+      addScheduleBetaLater(laterEl.value.trim(), scheduleBetaLaterCat);
+      return;
+    }
     var pushTomorrowBtn = ev.target.closest('[data-act="schedulebeta-push-tomorrow"]');
     if (pushTomorrowBtn) { pushScheduleBetaRowToTomorrow(+pushTomorrowBtn.dataset.idx); return; }
     var doneYesBtn = ev.target.closest('[data-act="schedulebeta-done-yes"]');
@@ -4887,9 +4951,11 @@
       var taskEl3 = editBox3.querySelector(".sbe-task");
       var catEl3 = editBox3.querySelector(".sbe-category");
       var t3 = timeEl3.value.trim() ? normTime(timeEl3.value) : "";
-      if (!t3) { timeEl3.focus(); return; }
-      if (!taskEl3.value.trim()) { taskEl3.focus(); return; }
       var idx3 = +sbeSave.dataset.idx;
+      // a row with no time yet is a "Later" task — it can stay untimed
+      var wasUntimed = !(scheduleBetaRows(state, scheduleBetaViewDate)[idx3] || {}).time;
+      if (!t3 && !wasUntimed) { timeEl3.focus(); return; }
+      if (!taskEl3.value.trim()) { taskEl3.focus(); return; }
       scheduleBetaExpandedIdx = -1;
       saveScheduleBetaRow(idx3, t3, taskEl3.value, catEl3.value);
       return;
@@ -4903,6 +4969,12 @@
       scheduleBetaAgoN = 0;
       render();
     }
+  });
+  scheduleBetaList.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" || ev.target.id !== "sbLaterInput") return;
+    ev.preventDefault();
+    var btn = document.getElementById("sbLaterAddBtn");
+    if (btn) btn.click();
   });
   scheduleBetaList.addEventListener("change", function (ev) {
     var picker = ev.target.closest("#sbDayPicker");
@@ -4934,6 +5006,10 @@
     var overEl = document.elementFromPoint(ev.clientX, ev.clientY);
     overEl = overEl && overEl.closest(".schedule-row-wrap");
     var rowsList = scheduleBetaDragEl.parentNode;
+    // two sections: a timed task can't be dragged down into Later, a Later
+    // task can be dragged up into the timeline (which schedules it there)
+    var dragUntimed = !!scheduleBetaDragEl.querySelector(".schedulebeta-summary[data-untimed]");
+    if (overEl && overEl !== scheduleBetaDragEl && dragUntimed && overEl.parentNode.classList.contains("sb-timed")) rowsList = overEl.parentNode;
     if (!overEl || overEl === scheduleBetaDragEl || overEl.parentNode !== rowsList) return;
     var rect = overEl.getBoundingClientRect();
     var before = ev.clientY < rect.top + rect.height / 2;
@@ -4944,7 +5020,7 @@
     scheduleBetaDragEl.classList.remove("dragging");
     var rowsList = scheduleBetaDragEl.parentNode;
     var newOrderIdx = Array.prototype.map.call(
-      rowsList.querySelectorAll(".schedulebeta-summary:not(.empty)"),
+      scheduleBetaList.querySelectorAll(".sb-timed .schedulebeta-summary:not(.empty), .sb-later .schedulebeta-summary:not(.empty)"),
       function (el) { return +el.dataset.idx; }
     );
     scheduleBetaDragEl = null;
