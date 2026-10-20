@@ -264,6 +264,16 @@
   }
   .goal-row .goal-input.invest { color: var(--good); }
   .goal-row .goal-input.limit { color: var(--danger); }
+  .goal-row .goal-input.default-dur { width: 4.5rem; flex: 0 0 4.5rem; color: var(--ink-faint); }
+  /* column header over the task goals list's two inputs (default duration,
+     daily budget) — same idea as Schedule's "Plan → Actual" head */
+  .task-goal-head {
+    display: flex; justify-content: flex-end; gap: 0.6rem; margin: -0.4rem 0 0.6rem;
+    font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--ink-faint);
+  }
+  .task-goal-head .sp-default { width: 4.5rem; text-align: right; }
+  .task-goal-head .sp-budget { width: 6.5rem; text-align: right; }
   .goals-empty { color: var(--ink-faint); font-size: 0.9rem; padding: 1.5rem 0; }
 
   /* ---------- menu page ---------- */
@@ -1010,7 +1020,7 @@
   // ---------- state ----------
   function emptyState() {
     return {
-      entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskCatalog: {},
+      entries: [], categories: [], goals: {}, goalKinds: {}, taskGoals: {}, taskDefaultDur: {}, taskCatalog: {},
       // when each taskCatalog[k] value was last set — taskCatalog itself is
       // otherwise merged by plain Object.assign (last object wins per key),
       // which has no concept of "newer" and will happily let a stale
@@ -1029,6 +1039,7 @@
       deletedGoals: {}, goalRevivals: {},
       deletedGoalKinds: {}, goalKindRevivals: {},
       deletedTaskGoals: {}, taskGoalRevivals: {},
+      deletedTaskDefaultDur: {}, taskDefaultDurRevivals: {},
       focusSwitches: [],
       abcNotes: [], deletedAbc: {},
       schedule: emptySchedule(),
@@ -1235,6 +1246,8 @@
     var goalKindRevivals = parseTimestamps(raw.goalKindRevivals, false);
     var deletedTaskGoals = parseTimestamps(raw.deletedTaskGoals, true);
     var taskGoalRevivals = parseTimestamps(raw.taskGoalRevivals, false);
+    var deletedTaskDefaultDur = parseTimestamps(raw.deletedTaskDefaultDur, true);
+    var taskDefaultDurRevivals = parseTimestamps(raw.taskDefaultDurRevivals, false);
     var deletedAbc = parseTimestamps(raw.deletedAbc, true);
 
     function categoryAllowed(name) { return tombstoneAllowed(deletedCategories, categoryRevivals, name); }
@@ -1242,6 +1255,7 @@
     function goalAllowed(cat) { return tombstoneAllowed(deletedGoals, goalRevivals, cat); }
     function goalKindAllowed(cat) { return tombstoneAllowed(deletedGoalKinds, goalKindRevivals, cat); }
     function taskGoalAllowed(k) { return tombstoneAllowed(deletedTaskGoals, taskGoalRevivals, k); }
+    function taskDefaultDurAllowed(k) { return tombstoneAllowed(deletedTaskDefaultDur, taskDefaultDurRevivals, k); }
 
     var entries = (Array.isArray(raw.entries) ? raw.entries : []).map(function (e) {
       // `type` is the old field name, kept here so existing data still loads
@@ -1321,6 +1335,16 @@
         if (k && v > 0 && taskGoalAllowed(k)) taskGoals[k] = v;
       });
     }
+    // per-task default duration, keyed the same way as taskGoals — how long
+    // this task normally takes, prefilled as Schedule Beta's insert-form
+    // Duration the moment you pick the task, not a cap like taskGoals is
+    var taskDefaultDur = {};
+    if (raw.taskDefaultDur && typeof raw.taskDefaultDur === "object") {
+      Object.keys(raw.taskDefaultDur).forEach(function (k) {
+        var v = Math.round(+raw.taskDefaultDur[k]);
+        if (k && v > 0 && taskDefaultDurAllowed(k)) taskDefaultDur[k] = v;
+      });
+    }
     // predefined task -> category mapping, used to autofill the category when
     // logging a known task
     var taskCatalog = {};
@@ -1355,7 +1379,7 @@
 
     return {
       entries: entries, categories: Object.keys(catSet).sort(),
-      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskCatalog: taskCatalog,
+      goals: goals, goalKinds: goalKinds, taskGoals: taskGoals, taskDefaultDur: taskDefaultDur, taskCatalog: taskCatalog,
       taskCatalogUpdatedAt: taskCatalogUpdatedAt,
       chipOrder: chipOrder, chipHidden: chipHidden,
       deletedIds: deletedIds,
@@ -1364,6 +1388,7 @@
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      deletedTaskDefaultDur: deletedTaskDefaultDur, taskDefaultDurRevivals: taskDefaultDurRevivals,
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
       schedule: normalizeSchedule(raw.schedule),
@@ -1395,6 +1420,8 @@
     var goalKindRevivals = mergeTimestamps(a.goalKindRevivals, b.goalKindRevivals);
     var deletedTaskGoals = mergeTimestamps(a.deletedTaskGoals, b.deletedTaskGoals);
     var taskGoalRevivals = mergeTimestamps(a.taskGoalRevivals, b.taskGoalRevivals);
+    var deletedTaskDefaultDur = mergeTimestamps(a.deletedTaskDefaultDur, b.deletedTaskDefaultDur);
+    var taskDefaultDurRevivals = mergeTimestamps(a.taskDefaultDurRevivals, b.taskDefaultDurRevivals);
     var deletedAbc = mergeTimestamps(a.deletedAbc, b.deletedAbc);
 
     var byId = {};
@@ -1446,6 +1473,7 @@
       goals: Object.assign({}, a.goals, b.goals),
       goalKinds: Object.assign({}, a.goalKinds, b.goalKinds),
       taskGoals: Object.assign({}, a.taskGoals, b.taskGoals),
+      taskDefaultDur: Object.assign({}, a.taskDefaultDur, b.taskDefaultDur),
       taskCatalog: mergeTaskCatalog(a.taskCatalog, b.taskCatalog, a.taskCatalogUpdatedAt, b.taskCatalogUpdatedAt),
       taskCatalogUpdatedAt: taskCatalogUpdatedAt,
       chipOrder: {
@@ -1461,6 +1489,7 @@
       deletedGoals: deletedGoals, goalRevivals: goalRevivals,
       deletedGoalKinds: deletedGoalKinds, goalKindRevivals: goalKindRevivals,
       deletedTaskGoals: deletedTaskGoals, taskGoalRevivals: taskGoalRevivals,
+      deletedTaskDefaultDur: deletedTaskDefaultDur, taskDefaultDurRevivals: taskDefaultDurRevivals,
       focusSwitches: focusSwitches,
       abcNotes: abcNotes, deletedAbc: deletedAbc,
       schedule: mergeSchedule(a.schedule, b.schedule),
@@ -2122,7 +2151,8 @@
     var cats = Object.keys(byCat).sort(function (a, b) { return a.localeCompare(b); });
     if (!cats.length) return '<p class="goals-empty">No tasks logged yet.</p>';
 
-    return '<p class="goals-intro">A daily budget for tasks you want to keep tight — usually about being more efficient. Grouped by category, most-used first; type a time on any you care about.</p>' +
+    return '<p class="goals-intro">A daily budget for tasks you want to keep tight — usually about being more efficient. Grouped by category, most-used first; type a time on any you care about. <b>Default</b> is how long a task normally takes — set it here and picking that task in Schedule Beta’s insert form fills its Duration in for you. <b>Budget</b> is the daily cap, same as before.</p>' +
+      '<div class="task-goal-head"><span class="sp-default">Default</span><span class="sp-budget">Budget</span></div>' +
       cats.map(function (cat) {
         var names = Object.keys(byCat[cat]).sort(function (a, b) {
           return byCat[cat][b].count - byCat[cat][a].count || a.localeCompare(b);
@@ -2132,11 +2162,16 @@
           names.map(function (tn) {
             var info = byCat[cat][tn];
             var g = state.taskGoals[taskKey(cat, tn)] || 0;
+            var dd = state.taskDefaultDur[taskKey(cat, tn)] || 0;
             var mins = Math.round(info.ms / 60000);
             return '<div class="goal-row" data-cat="' + escapeHtml(cat) + '" data-task="' + escapeHtml(tn) + '">' +
               '<span class="goal-cat"><span class="goal-cat-name">' + escapeHtml(tn) + "</span>" +
                 '<span class="task-meta">×' + info.count + (mins ? " · " + fmtMins(mins) : "") + "</span></span>" +
-              '<input type="text" class="goal-input limit" inputmode="text" autocomplete="off" placeholder="none" value="' +
+              '<input type="text" class="goal-input default-dur" inputmode="text" autocomplete="off" placeholder="—" ' +
+                'title="Default duration — prefills Schedule Beta’s insert Duration" value="' +
+                (dd ? escapeHtml(fmtMins(dd)) : "") + '">' +
+              '<input type="text" class="goal-input limit" inputmode="text" autocomplete="off" placeholder="none" ' +
+                'title="Daily budget — a cap to stay under" value="' +
                 (g ? escapeHtml(fmtMins(g)) : "") + '">' +
             "</div>";
           }).join("") +
@@ -2729,6 +2764,16 @@
   }
   // same pattern as the home timeline's attachEditAc — wires suggestions
   // fresh onto whichever form's task/category fields each time it's opened
+  // the insert form's Duration field only — the per-row edit form has none —
+  // gets prefilled with the task's set default the moment the task is
+  // picked (chip or autocomplete), as long as Duration isn't already typed
+  function fillScheduleBetaDefaultDur(editBox, prefix, taskName, catName) {
+    if (prefix !== "sbi") return;
+    var durEl = editBox.querySelector(".sbi-dur");
+    if (!durEl || durEl.value.trim()) return;
+    var dd = state.taskDefaultDur[taskKey(catName || "", taskName)];
+    if (dd) durEl.value = fmtMins(dd);
+  }
   function attachScheduleBetaFormAc(editBox, prefix) {
     var taskEl = editBox.querySelector("." + prefix + "-task");
     var catEl = editBox.querySelector("." + prefix + "-category");
@@ -2736,6 +2781,7 @@
     wireTaskAc(taskEl, editBox.querySelector("." + prefix + "-task-ac"), function (name, cat) {
       taskEl.value = name;
       if (cat) catEl.value = cat;
+      fillScheduleBetaDefaultDur(editBox, prefix, name, cat || catEl.value);
     }, function () { catEl.focus(); });
   }
   function renderScheduleBetaPage() {
@@ -3970,6 +4016,16 @@
       return s;
     });
   }
+  // how long this task normally takes — prefilled into Schedule Beta's
+  // insert-form Duration the moment the task is picked, a separate concept
+  // from taskGoals' daily budget/cap
+  function setTaskDefaultDur(category, task, mins) {
+    var k = taskKey(category, task);
+    queueMutation(function (s) {
+      setTombstoned(s, "taskDefaultDur", "deletedTaskDefaultDur", "taskDefaultDurRevivals", k, mins > 0 ? mins : undefined);
+      return s;
+    });
+  }
   // clears a category's delete tombstone, if any — called wherever a category
   // gets (re-)created on purpose, so a deliberate re-add isn't undone by the
   // earlier deletion's tombstone
@@ -4090,6 +4146,12 @@
         newTaskGoals[(kc === oldName ? target : kc) + "\n" + kt] = s.taskGoals[k];
       });
       s.taskGoals = newTaskGoals;
+      var newTaskDefaultDur = {};
+      Object.keys(s.taskDefaultDur).forEach(function (k) {
+        var pd = k.split("\n"), kcd = pd[0], ktd = pd.slice(1).join("\n");
+        newTaskDefaultDur[(kcd === oldName ? target : kcd) + "\n" + ktd] = s.taskDefaultDur[k];
+      });
+      s.taskDefaultDur = newTaskDefaultDur;
       var newCatalog = {};
       s.taskCatalogUpdatedAt = Object.assign({}, s.taskCatalogUpdatedAt);
       Object.keys(s.taskCatalog).forEach(function (t) {
@@ -4782,6 +4844,7 @@
         editBoxC.querySelector("." + pC + "-task").value = formChip.dataset.name;
         var cat = state.taskCatalog[formChip.dataset.name];
         if (cat) editBoxC.querySelector("." + pC + "-category").value = cat;
+        fillScheduleBetaDefaultDur(editBoxC, pC, formChip.dataset.name, cat);
       } else {
         editBoxC.querySelector("." + pC + "-category").value = formChip.dataset.name;
       }
@@ -4914,8 +4977,12 @@
     if (!row || ev.target.tagName !== "INPUT") return;
     var mins = parseDuration(ev.target.value);
     ev.target.value = mins ? fmtMins(mins) : "";
-    if (row.dataset.task != null) setTaskGoal(row.dataset.cat, row.dataset.task, mins);
-    else setGoal(row.dataset.cat, mins);
+    if (row.dataset.task != null) {
+      if (ev.target.classList.contains("default-dur")) setTaskDefaultDur(row.dataset.cat, row.dataset.task, mins);
+      else setTaskGoal(row.dataset.cat, row.dataset.task, mins);
+    } else {
+      setGoal(row.dataset.cat, mins);
+    }
   });
   goalsList.addEventListener("click", function (ev) {
     var tab = ev.target.closest(".goals-tab");
