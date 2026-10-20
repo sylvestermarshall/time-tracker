@@ -2853,10 +2853,7 @@
         '<input type="date" id="sbDayPicker" value="' + dayK + '">' +
         '<button type="button" class="iconbtn" id="sbDayNext" aria-label="Next day"><i data-lucide="chevron-right"></i></button>' +
       "</div>" +
-      '<div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.8rem;">' +
-        '<button type="button" class="btn btn-ghost btn-small" id="scheduleBetaResetBtn"><i data-lucide="rotate-ccw"></i>Reset this day</button>' +
-      "</div>" +
-      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan instead of losing it to Reset. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
+      '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
       '<div class="time-wrap" style="margin-bottom:0.9rem;">' +
         '<input type="text" id="sbLaterInput" placeholder="Add a task for later — no time needed" autocomplete="off" aria-label="Add a task for later">' +
         '<select id="sbLaterCat" aria-label="Category for the later task"><option value="">No category</option>' +
@@ -3826,8 +3823,8 @@
       return s;
     });
   }
-  // the row at idx hasn't been done — carry it into tomorrow's plan instead
-  // of losing it to Reset: closes today's gap the same way delete does, then
+  // the row at idx hasn't been done — carry it into tomorrow's plan:
+  // closes today's gap the same way delete does, then
   // drops the task (text + category only; time/Plan/done reset — tomorrow's
   // timeline is its own, not an assumption this slot is still free) into the
   // first open slot on tomorrow's list, growing it if it's already full
@@ -3944,18 +3941,6 @@
       var live = scheduleLiveDurationMin(rows, idx);
       if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
       setScheduleBetaRows(s, dayK, rows);
-      return s;
-    });
-  }
-  // clears just the currently-viewed day's plan — other days (including
-  // anything already pushed forward into tomorrow) are untouched, and this
-  // never touches real entries either way (see syncScheduleBetaLoggedEntries
-  // for the only thing that does)
-  function resetScheduleBeta() {
-    var dayK = scheduleBetaViewDate;
-    var now = new Date().toISOString();
-    queueMutation(function (s) {
-      setScheduleBetaRows(s, dayK, emptyScheduleBetaDay().map(function (r) { return Object.assign({}, r, { updatedAt: now }); }));
       return s;
     });
   }
@@ -4835,10 +4820,6 @@
       scheduleBetaViewDate = scheduleBetaTomorrowKey(scheduleBetaViewDate);
       scheduleBetaExpandedIdx = -1; scheduleBetaInsertAfter = -1;
       render();
-      return;
-    }
-    if (ev.target.closest("#scheduleBetaResetBtn") && confirm("Clear this day's schedule? This can't be undone.")) {
-      resetScheduleBeta();
       return;
     }
     if (ev.target.closest("#scheduleBetaGrowBtn")) { growScheduleBeta(); return; }
