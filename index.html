@@ -122,6 +122,14 @@
     background: var(--surface-raised); color: var(--ink);
     border: 1px solid var(--line-soft); border-radius: var(--radius-control); padding: 0.6rem 0.75rem;
   }
+  #sbLaterCat {
+    flex: 0 1 11rem; min-width: 0; font: inherit; font-size: 0.95rem;
+    -webkit-appearance: none; appearance: none;
+    background: var(--surface-raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a96a3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 0.75rem center;
+    color: var(--ink); border: 1px solid var(--line-soft); border-radius: var(--radius-control);
+    padding: 0.6rem 2rem 0.6rem 0.75rem;
+  }
+  #sbLaterCat:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
   .time-wrap { display: flex; gap: 0.4rem; }
   .time-wrap input { flex: 1; }
