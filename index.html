@@ -2803,7 +2803,23 @@
     var editBox = box.querySelector(".schedulebeta-edit");
     if (editBox) {
       var prefix = scheduleBetaInsertAfter !== -1 ? "sbi" : "sbe";
-      attachTimeInput(editBox.querySelector("." + prefix + "-time"));
+      var sbTimeEl = editBox.querySelector("." + prefix + "-time");
+      attachTimeInput(sbTimeEl);
+      // same as the home log form's time field: once 4 digits are in, jump
+      // ahead automatically instead of making you tap the next field —
+      // insert's form has a Duration field right after time, edit's doesn't
+      var sbNextSel = prefix === "sbi" ? ".sbi-dur" : "." + prefix + "-task";
+      sbTimeEl.addEventListener("input", function () {
+        var digits = sbTimeEl.value.replace(/\D/g, "");
+        if (digits.length === 4) {
+          var t = normTime(digits);
+          if (t) {
+            sbTimeEl.value = t;
+            var nextEl = editBox.querySelector(sbNextSel);
+            if (nextEl) nextEl.focus();
+          }
+        }
+      });
       attachScheduleBetaFormAc(editBox, prefix);
       renderScheduleBetaFormChips(editBox, prefix);
       if (prefix === "sbi") editBox.querySelector(".sbi-dur").focus();
