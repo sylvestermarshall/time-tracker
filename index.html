@@ -836,10 +836,9 @@
   var TOKEN_KEY = "time-tracker-gh-token";
   var GIST_ID_KEY = "time-tracker-gist-id";
   var SCHEDULE_SIZE = 30;
-  // Schedule Beta starts bigger and can keep growing (its own "Add more
-  // rows" button) — the main Schedule page above stays fixed at 30
+  // Schedule Beta starts bigger and grows on demand (a blank slot is always
+  // kept at the end) — the main Schedule page above stays fixed at 30
   var SCHEDULE_BETA_MIN_SIZE = 100;
-  var SCHEDULE_BETA_GROW_BY = 50;
   var GITHUB_API = "https://api.github.com";
   var GIST_FILENAME = "time-tracker.json";
 
@@ -1121,7 +1120,7 @@
   // instead of being lost to Reset. A day that's in the past is normalized
   // down to just its actual content (no padding) since you're not adding
   // more to it; today and any future day stay padded to
-  // SCHEDULE_BETA_MIN_SIZE (or however far "Add more rows" has grown it)
+  // SCHEDULE_BETA_MIN_SIZE (or however far it has grown)
   // so there's always room to tap into.
   function blankScheduleBetaRow() {
     return { time: "", text: "", category: "", plannedMin: null, done: "", loggedEntryId: "", updatedAt: new Date(0).toISOString() };
@@ -1213,6 +1212,7 @@
     var now = new Date().toISOString();
     var timed = [], later = [], blank = [];
     rows.forEach(function (r) { (r.time ? timed : r.text ? later : blank).push(r); });
+    if (!blank.length) blank.push(blankScheduleBetaRow());
     s.scheduleBetaByDate[dayK] = timed.concat(later, blank).map(function (r, i) {
       return r === rows[i] ? r : Object.assign({}, r, { updatedAt: now });
     });
@@ -2877,9 +2877,11 @@
       '<div class="schedule-rows sb-timed">' + pick(function (r) { return !!r.time; }) + "</div>" +
       (hasLater ? '<p class="goals-intro" style="margin:1.1rem 0 0.4rem;"><b>Later</b> — no time yet. Type a time to slot a task into the timeline, or drag it up into it.</p>' +
         '<div class="schedule-rows sb-later">' + pick(function (r) { return !r.time && r.text; }) + "</div>" : "") +
-      '<div class="schedule-rows sb-blank" style="margin-top:0.5rem;">' + pick(function (r) { return !r.time && !r.text; }) + "</div>" +
-      '<button type="button" class="btn btn-ghost" id="scheduleBetaGrowBtn" style="width:100%;margin-top:0.8rem;">' +
-        '<i data-lucide="plus"></i>Add ' + SCHEDULE_BETA_GROW_BY + ' more rows</button>';
+      // just one "Tap to add a task" row, always at the bottom — more blank
+      // slots exist behind it, but there's no reason to show them all
+      '<div class="schedule-rows sb-blank" style="margin-top:0.5rem;">' +
+        (function () { var seen = false; return pick(function (r) { if (r.time || r.text || seen) return false; seen = true; return true; }); })() +
+      "</div>";
 
     // at most one of these is ever open at once (opening either one closes
     // the other — see the click handler), so there's only ever a single
@@ -3634,25 +3636,6 @@
   }
 
   // ---------- schedule beta mutations ----------
-  // true if the last slot of the currently-viewed day is already in use —
-  // same guard as scheduleIsFull, against that day's scheduleBeta rows
-  function scheduleBetaIsFull() {
-    var rows = scheduleBetaRows(state, scheduleBetaViewDate);
-    var last = rows[rows.length - 1];
-    return !!(last.time || last.text);
-  }
-  // how many blank slots are free at the end of the currently-viewed day's
-  // list — insertScheduleTask only ever needs 1, but an interrupting insert
-  // (see below) needs 2
-  function scheduleBetaFreeTailSlots() {
-    var rows = scheduleBetaRows(state, scheduleBetaViewDate);
-    var n = 0;
-    for (var i = rows.length - 1; i >= 0; i--) {
-      if (rows[i].time || rows[i].text) break;
-      n++;
-    }
-    return n;
-  }
   // true if inserting at time t right after afterIdx would land inside that
   // row's own current block instead of after it's already finished — e.g.
   // Work runs 11:34–11:40 and you insert something at 11:36, interrupting it
@@ -3767,6 +3750,10 @@
       var interrupts = scheduleBetaInsertInterrupts(rows, afterIdx, t);
       var remaining = interrupts ? hhmmToMinutes(nextOld) - hhmmToMinutes(t) : 0;
       var slots = interrupts ? 2 : 1;
+      // make sure there are enough blank slots at the tail to shift into
+      var tailFree = 0;
+      for (var q = rows.length - 1; q >= 0 && !rows[q].time && !rows[q].text; q--) tailFree++;
+      for (; tailFree < slots; tailFree++) rows.push(blankScheduleBetaRow());
       var delta = !nextOld ? 0 : interrupts ? dur : (hhmmToMinutes(t) + dur - hhmmToMinutes(nextOld));
 
       for (var k = rows.length - 1 - slots; k > afterIdx; k--) rows[k + slots] = rows[k];
@@ -3950,20 +3937,6 @@
       var live = scheduleLiveDurationMin(rows, idx);
       if (live != null) rows[idx] = Object.assign({}, rows[idx], { plannedMin: live, updatedAt: now });
       setScheduleBetaRows(s, dayK, rows);
-      return s;
-    });
-  }
-  // the "Add more rows" button at the bottom of the list — just appends more
-  // blank slots to the currently-viewed day, no cap; normalizeScheduleBetaDay
-  // treats a day's current length as a floor (for today/future days), never
-  // shrinking it back down
-  function growScheduleBeta() {
-    var dayK = scheduleBetaViewDate;
-    var now = new Date().toISOString();
-    queueMutation(function (s) {
-      var extra = [];
-      for (var i = 0; i < SCHEDULE_BETA_GROW_BY; i++) extra.push(Object.assign({}, blankScheduleBetaRow(), { updatedAt: now }));
-      setScheduleBetaRows(s, dayK, scheduleBetaRows(s, dayK).concat(extra));
       return s;
     });
   }
@@ -4831,7 +4804,6 @@
       render();
       return;
     }
-    if (ev.target.closest("#scheduleBetaGrowBtn")) { growScheduleBeta(); return; }
     if (ev.target.closest("#sbLaterAddBtn")) {
       var laterEl = document.getElementById("sbLaterInput");
       if (!laterEl.value.trim()) { laterEl.focus(); return; }
@@ -4927,13 +4899,6 @@
       if (!textEl.value.trim()) { textEl.focus(); return; }
       var dur = Math.round(parseDuration(durEl.value));
       if (!dur || dur <= 0) { durEl.focus(); return; }
-      // an interrupting insert needs 2 free slots (the new task plus a
-      // "...continued" row for whatever it bumped), a normal one needs 1
-      var slotsNeeded = scheduleBetaInsertInterrupts(scheduleBetaRows(state, scheduleBetaViewDate), afterIdx, t) ? 2 : 1;
-      if (scheduleBetaFreeTailSlots() < slotsNeeded) {
-        alert("Schedule Beta is out of blank rows for this — tap “Add more rows” at the bottom of the list, or delete/finish a task first.");
-        return;
-      }
       scheduleBetaInsertAfter = -1;
       insertScheduleBetaTask(afterIdx, t, dur, textEl.value, catEl.value);
       return;
