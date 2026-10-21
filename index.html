@@ -394,12 +394,12 @@
   .sb-row-line { display: flex; align-items: stretch; gap: 0.4rem; }
   .sb-row-line .schedulebeta-summary { flex: 1 1 auto; min-width: 0; }
   .sb-insert-side {
-    flex: 0 0 2.6rem; display: flex; align-items: center; justify-content: center;
-    background: transparent; color: var(--ink-faint); cursor: pointer;
-    border: 1px dashed var(--line); border-radius: var(--radius-control);
+    flex: 0 0 3.8rem; display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--accent); cursor: pointer;
+    border: 1px solid var(--accent-soft-line); border-radius: var(--radius-control);
   }
-  .sb-insert-side svg { width: 1.1rem; height: 1.1rem; }
-  .sb-insert-side:active { border-color: var(--accent); color: var(--accent); }
+  .sb-insert-side svg { width: 1.5rem; height: 1.5rem; stroke-width: 2.5; }
+  .sb-insert-side:active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .schedulebeta-summary.empty { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
   .schedulebeta-summary-time {
     flex: 0 0 4.4rem; width: 4.4rem; text-align: center;
