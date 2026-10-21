@@ -2875,13 +2875,13 @@
         '<span class="sp-dur">Plan → Actual</span>' +
       "</div>" +
       '<div class="schedule-rows sb-timed">' + pick(function (r) { return !!r.time; }) + "</div>" +
-      (hasLater ? '<p class="goals-intro" style="margin:1.1rem 0 0.4rem;"><b>Later</b> — no time yet. Type a time to slot a task into the timeline, or drag it up into it.</p>' +
-        '<div class="schedule-rows sb-later">' + pick(function (r) { return !r.time && r.text; }) + "</div>" : "") +
-      // just one "Tap to add a task" row, always at the bottom — more blank
-      // slots exist behind it, but there's no reason to show them all
+      // just one "Tap to add a task" row, between the timeline and Later —
+      // more blank slots exist behind it, but there's no reason to show them all
       '<div class="schedule-rows sb-blank" style="margin-top:0.5rem;">' +
         (function () { var seen = false; return pick(function (r) { if (r.time || r.text || seen) return false; seen = true; return true; }); })() +
-      "</div>";
+      "</div>" +
+      (hasLater ? '<p class="goals-intro" style="margin:1.1rem 0 0.4rem;"><b>Later</b> — no time yet. Type a time to slot a task into the timeline, or drag it up into it.</p>' +
+        '<div class="schedule-rows sb-later">' + pick(function (r) { return !r.time && r.text; }) + "</div>" : "");
 
     // at most one of these is ever open at once (opening either one closes
     // the other — see the click handler), so there's only ever a single
