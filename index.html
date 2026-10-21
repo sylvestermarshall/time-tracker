@@ -390,6 +390,16 @@
     padding: 0.6rem 0.75rem; border-radius: var(--radius-control);
     background: var(--surface); box-shadow: var(--shadow-soft); cursor: pointer;
   }
+  /* the card plus a tall tap-strip to its right for "insert a task after" */
+  .sb-row-line { display: flex; align-items: stretch; gap: 0.4rem; }
+  .sb-row-line .schedulebeta-summary { flex: 1 1 auto; min-width: 0; }
+  .sb-insert-side {
+    flex: 0 0 2.6rem; display: flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--ink-faint); cursor: pointer;
+    border: 1px dashed var(--line); border-radius: var(--radius-control);
+  }
+  .sb-insert-side svg { width: 1.1rem; height: 1.1rem; }
+  .sb-insert-side:active { border-color: var(--accent); color: var(--accent); }
   .schedulebeta-summary.empty { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
   .schedulebeta-summary-time {
     flex: 0 0 4.4rem; width: 4.4rem; text-align: center;
@@ -2816,6 +2826,7 @@
         var used = !!(row.time || row.text);
         var untimed = used && !row.time;
         return '<div class="schedule-row-wrap">' +
+          '<div class="sb-row-line">' +
           '<div class="schedulebeta-summary' + (used ? "" : " empty") + '"' + (untimed ? " data-untimed" : "") + ' data-idx="' + i + '" role="button" tabindex="0" ' +
             'aria-label="Row ' + (i + 1) + (used ? ", edit" : ", tap to add a task") + '">' +
             (used ? '<button type="button" class="goal-move schedulebeta-drag" aria-label="Drag to reorder" title="Drag to reorder"><i data-lucide="grip-vertical"></i></button>' : "") +
@@ -2828,18 +2839,16 @@
                 '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-push-tomorrow" data-idx="' + i + '" ' +
                   'aria-label="Push row ' + (i + 1) + ' to tomorrow" title="Didn’t get to it — push to tomorrow"><i data-lucide="arrow-right"></i></button>'
                 : "") +
-              (untimed ? "" : '<button type="button" class="schedule-icon-btn" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
-                'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>') +
               '<button type="button" class="schedule-icon-btn danger" data-act="schedulebeta-delete" data-idx="' + i + '" ' +
                 'aria-label="Delete row ' + (i + 1) + '" title="Delete task"><i data-lucide="trash-2"></i></button>' +
               (untimed ? "" :
-              '<button type="button" class="schedule-icon-btn cross' + (row.done === "no" ? " active" : "") + '" ' +
-                'data-act="schedulebeta-done-no" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' not done" ' +
-                'title="Didn’t get to it"><i data-lucide="x"></i></button>' +
               '<button type="button" class="schedule-icon-btn check' + (row.done === "yes" ? " active" : "") + '" ' +
                 'data-act="schedulebeta-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
                 'title="Done on time"><i data-lucide="check"></i></button>') +
             "</div>" : "") +
+          "</div>" +
+          (used && !untimed ? '<button type="button" class="sb-insert-side" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
+            'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' : "") +
           "</div>" +
           (scheduleBetaInsertAfter === i ? scheduleBetaInsertFormHtml(i) : "") +
         "</div>";
