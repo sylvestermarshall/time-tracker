@@ -1995,13 +1995,21 @@
     var nowD = new Date();
     var nowMin = nowD.getHours() * 60 + nowD.getMinutes();
     var today = todayKey();
-    var yKey = dateKey(new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate() - 1));
-    var wk = [];
-    for (var d = 1; d <= 7; d++) {
+    // days you didn't log (under an hour of Work) are skipped, not counted as
+    // zero: "previous" is the latest day with at least an hour of Work, and
+    // the average is over the 7 such weekdays before that one (looking back
+    // as far as it takes, capped at ~4 months)
+    var yKey = "", yDate = null, wk = [];
+    for (var d = 1; d <= 120 && wk.length < 7; d++) {
       var dd = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate() - d);
-      if (dd.getDay() !== 0 && dd.getDay() !== 6) wk.push(compareSeries(dateKey(dd), CAT).points);
+      var ser = compareSeries(dateKey(dd), CAT);
+      if (ser.totalMin < 60) continue;
+      if (!yKey) { yKey = dateKey(dd); yDate = dd; continue; }
+      if (dd.getDay() !== 0 && dd.getDay() !== 6) wk.push(ser.points);
     }
-    var tSeries = compareSeries(today, CAT).points, ySeries = compareSeries(yKey, CAT).points;
+    var tSeries = compareSeries(today, CAT).points;
+    var ySeries = yKey ? compareSeries(yKey, CAT).points : [[0, 0], [1440, 0]];
+    var yLabel = yDate ? yDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "No earlier day";
     function avgAt(t) {
       if (!wk.length) return 0;
       return wk.reduce(function (a, pts) { return a + seriesValueAt(pts, t); }, 0) / wk.length;
@@ -2047,11 +2055,11 @@
     }
     var clock = pad(nowD.getHours()) + ":" + pad(nowD.getMinutes());
     el.innerHTML = '<div class="wp-title">Work so far</div>' +
-      '<div class="wp-sub">Up to ' + clock + ", same time each day</div>" +
+      '<div class="wp-sub">Up to ' + clock + ", same time each day. Days under 1h of Work are skipped.</div>" +
       '<div class="wp-stats">' +
         stat("var(--accent)", false, "Today", tNow) +
-        stat("var(--compare-b)", false, "Yesterday", yNow) +
-        stat("var(--compare-a)", true, "Avg weekday, last 7 days", aNow) +
+        stat("var(--compare-b)", false, "Last logged · " + yLabel, yNow) +
+        stat("var(--compare-a)", true, "Avg of " + wk.length + " earlier days", aNow) +
       "</div>" + svg;
   }
 
