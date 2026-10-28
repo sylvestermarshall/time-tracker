@@ -403,6 +403,12 @@
   .sb-insert-side.eat { background: transparent; border-style: dashed; }
   .sb-insert-side svg { width: 1.5rem; height: 1.5rem; stroke-width: 2.5; }
   .sb-insert-side:active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .sb-cat-total {
+    flex: 1 0 100%; display: flex; align-items: center; gap: 0.5rem; padding-top: 0.15rem;
+    font-size: 0.8rem; color: var(--ink-faint);
+  }
+  .sb-cat-total b { font-family: "JetBrains Mono", monospace; font-weight: 600; color: var(--ink-soft); }
+  .sb-cat-total b.done { color: var(--accent); }
   .schedulebeta-summary.empty { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
   .schedulebeta-summary-time {
     flex: 0 0 4.4rem; width: 4.4rem; text-align: center;
@@ -2828,6 +2834,18 @@
     var rel = relLabel(dayK);
     var nice = keyToDate(dayK).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
     var dateLabelHtml = escapeHtml(nice) + (rel ? ' <span class="rel">' + escapeHtml(rel) + "</span>" : "");
+    // per-category day totals: what's scheduled (each row's live length,
+    // falling back to its plan when there's no next row to measure against)
+    // vs how much of that is ticked done
+    var catTotals = {};
+    rows.forEach(function (r, j) {
+      if (!r.time || !r.category) return;
+      var m = scheduleLiveDurationMin(rows, j);
+      if (m == null) m = r.plannedMin || 0;
+      var ct = catTotals[r.category] || (catTotals[r.category] = { sched: 0, done: 0 });
+      ct.sched += m;
+      if (r.done === "yes") ct.done += m;
+    });
     var rowHtml = function (row, i) {
         if (scheduleBetaExpandedIdx === i) return scheduleBetaEditFormHtml(row, i);
         var used = !!(row.time || row.text);
@@ -2853,6 +2871,10 @@
                 'data-act="schedulebeta-done-yes" data-idx="' + i + '" aria-label="Mark row ' + (i + 1) + ' done on time" ' +
                 'title="Done on time"><i data-lucide="check"></i></button>') +
             "</div>" : "") +
+            (used && !untimed && catTotals[row.category] ?
+              '<div class="sb-cat-total">' + escapeHtml(row.category) + ' today: scheduled <b>' + fmtMins(catTotals[row.category].sched) +
+                '</b> · done <b' + (catTotals[row.category].done === catTotals[row.category].sched ? ' class="done"' : "") + ">" +
+                fmtMins(catTotals[row.category].done) + "</b></div>" : "") +
           "</div>" +
           (used && !untimed ? '<div class="sb-side-col">' +
             '<button type="button" class="sb-insert-side" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
