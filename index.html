@@ -392,12 +392,15 @@
   }
   /* the card plus a tall tap-strip to its right for "insert a task after" */
   .sb-row-line { display: flex; align-items: stretch; gap: 0.4rem; }
+  .sb-side-col { flex: 0 0 3.8rem; display: flex; flex-direction: column; gap: 0.3rem; }
+  .sb-side-col .sb-insert-side { flex: 1 1 0; }
   .sb-row-line .schedulebeta-summary { flex: 1 1 auto; min-width: 0; }
   .sb-insert-side {
     flex: 0 0 3.8rem; display: flex; align-items: center; justify-content: center;
     background: var(--accent-soft); color: var(--accent); cursor: pointer;
     border: 1px solid var(--accent-soft-line); border-radius: var(--radius-control);
   }
+  .sb-insert-side.eat { background: transparent; border-style: dashed; }
   .sb-insert-side svg { width: 1.5rem; height: 1.5rem; stroke-width: 2.5; }
   .sb-insert-side:active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .schedulebeta-summary.empty { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
@@ -875,6 +878,8 @@
   var scheduleInsertAfter = -1;
   // same idea, for Schedule Beta's own mid-list insert form
   var scheduleBetaInsertAfter = -1;
+  // the open insert form is the "carve out of the next task" variant
+  var scheduleBetaInsertEat = false;
   // index of the Schedule Beta row currently expanded for editing (tap a row
   // to open it, like a Home timeline entry), or -1 if none is
   var scheduleBetaExpandedIdx = -1;
@@ -2754,11 +2759,13 @@
     var displaced = scheduleBetaRows(state, scheduleBetaViewDate)[afterIdx + 1];
     return '<div class="schedule-row-wrap">' +
       '<div class="panel schedulebeta-edit" data-idx="' + afterIdx + '">' +
-        '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>' +
+        (scheduleBetaInsertEat ?
+          '<p class="schedule-insert-hint">This task takes its time out of the next one (' + escapeHtml(displaced ? displaced.text || "next task" : "next task") + ') — nothing after it moves.</p>' :
+          '<p class="schedule-insert-hint">If this time falls inside the row above’s own block, it’s treated as an interruption — whatever time it still owed becomes a “(continued)” row right after this one.</p>') +
         scheduleBetaFormFieldsHtml("sbi", { time: displaced ? displaced.time : "", text: "", category: "" }, true) +
         '<div class="form-actions">' +
           '<button type="button" class="btn btn-ghost" data-act="schedulebeta-insert-cancel">Cancel</button>' +
-          '<button type="button" class="btn btn-primary" data-act="schedulebeta-insert-save" data-idx="' + afterIdx + '"><i data-lucide="plus"></i>Add</button>' +
+          '<button type="button" class="btn btn-primary" data-act="schedulebeta-insert-save" data-idx="' + afterIdx + '"><i data-lucide="' + (scheduleBetaInsertEat ? "scissors" : "plus") + '"></i>Add</button>' +
         "</div>" +
       "</div>" +
     "</div>";
@@ -2847,8 +2854,13 @@
                 'title="Done on time"><i data-lucide="check"></i></button>') +
             "</div>" : "") +
           "</div>" +
-          (used && !untimed ? '<button type="button" class="sb-insert-side" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
-            'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' : "") +
+          (used && !untimed ? '<div class="sb-side-col">' +
+            '<button type="button" class="sb-insert-side" data-act="schedulebeta-insert" data-idx="' + i + '" ' +
+              'aria-label="Insert task after row ' + (i + 1) + '" title="Insert task after"><i data-lucide="plus"></i></button>' +
+            (rows[i + 1] && rows[i + 1].time ?
+              '<button type="button" class="sb-insert-side eat" data-act="schedulebeta-insert-eat" data-idx="' + i + '" ' +
+                'aria-label="Add a task carved out of the next task" title="Add a task that eats into the next one"><i data-lucide="scissors"></i></button>' : "") +
+            "</div>" : "") +
           "</div>" +
           (scheduleBetaInsertAfter === i ? scheduleBetaInsertFormHtml(i) : "") +
         "</div>";
@@ -3779,6 +3791,35 @@
         var tt = (delta && r.time) ? minutesToHHMM(hhmmToMinutes(r.time) + delta) : r.time;
         rows[i] = Object.assign({}, r, { time: tt, updatedAt: now });
       }
+      setScheduleBetaRows(s, dayK, rows);
+      syncScheduleBetaLoggedEntries(s, dayK);
+      return s;
+    });
+  }
+  // like insertScheduleBetaTask, but nothing after the new row is pushed
+  // down: the new task takes its minutes out of the row that follows it
+  // (e.g. a block of "Work" you reserved before knowing what the work was).
+  // That row just starts later and its plan shrinks by what was taken.
+  function eatScheduleBetaTask(afterIdx, t, dur, text, category) {
+    var dayK = scheduleBetaViewDate;
+    var now = new Date().toISOString();
+    queueMutation(function (s) {
+      var rows = scheduleBetaRows(s, dayK).slice();
+      var next = rows[afterIdx + 1];
+      if (!next || !next.time) return s;
+      var endMin = hhmmToMinutes(t) + dur;
+      var eaten = Math.max(0, endMin - hhmmToMinutes(next.time));
+      var tailFree = 0;
+      for (var q = rows.length - 1; q >= 0 && !rows[q].time && !rows[q].text; q--) tailFree++;
+      if (!tailFree) rows.push(blankScheduleBetaRow());
+      for (var k = rows.length - 2; k > afterIdx; k--) rows[k + 1] = rows[k];
+      rows[afterIdx + 1] = { time: t, text: text || "", category: category || "", plannedMin: dur, done: "", loggedEntryId: "", updatedAt: now };
+      var shrunk = Object.assign({}, next, { time: minutesToHHMM(Math.max(endMin, hhmmToMinutes(next.time))) });
+      if (next.plannedMin != null) shrunk.plannedMin = Math.max(1, next.plannedMin - eaten);
+      rows[afterIdx + 2] = shrunk;
+      // every position from the new row on shifted — stamp them all fresh
+      // (same reason as insertScheduleBetaTask)
+      for (var i = afterIdx + 2; i < rows.length; i++) rows[i] = Object.assign({}, rows[i], { updatedAt: now });
       setScheduleBetaRows(s, dayK, rows);
       syncScheduleBetaLoggedEntries(s, dayK);
       return s;
@@ -4825,6 +4866,16 @@
       // closes any row currently expanded for editing
       scheduleBetaExpandedIdx = -1;
       scheduleBetaInsertAfter = +insBtn.dataset.idx;
+      scheduleBetaInsertEat = false;
+      scheduleBetaAgoN = 0;
+      render();
+      return;
+    }
+    var eatBtn = ev.target.closest('[data-act="schedulebeta-insert-eat"]');
+    if (eatBtn) {
+      scheduleBetaExpandedIdx = -1;
+      scheduleBetaInsertAfter = +eatBtn.dataset.idx;
+      scheduleBetaInsertEat = true;
       scheduleBetaAgoN = 0;
       render();
       return;
@@ -4899,6 +4950,19 @@
       if (!textEl.value.trim()) { textEl.focus(); return; }
       var dur = Math.round(parseDuration(durEl.value));
       if (!dur || dur <= 0) { durEl.focus(); return; }
+      if (scheduleBetaInsertEat) {
+        var eatRows = scheduleBetaRows(state, scheduleBetaViewDate);
+        var eatNext = eatRows[afterIdx + 1], eatAfter = eatRows[afterIdx + 2];
+        if (eatNext && eatNext.time && eatAfter && eatAfter.time &&
+            hhmmToMinutes(t) + dur >= hhmmToMinutes(eatAfter.time)) {
+          alert("That's longer than the time left in the next task, so there's nothing to carve it out of.");
+          durEl.focus();
+          return;
+        }
+        scheduleBetaInsertAfter = -1;
+        eatScheduleBetaTask(afterIdx, t, dur, textEl.value, catEl.value);
+        return;
+      }
       scheduleBetaInsertAfter = -1;
       insertScheduleBetaTask(afterIdx, t, dur, textEl.value, catEl.value);
       return;
