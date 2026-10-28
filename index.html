@@ -420,6 +420,34 @@
   .schedulebeta-edit { margin-bottom: 0; }
   .schedule-row-wrap.dragging { opacity: 0.35; }
 
+  /* ---------- Work pulse (Schedule Beta side panel / FAB) ---------- */
+  #workPulse, #workPulseFab { display: none; }
+  body.wp-on #workPulseFab {
+    display: flex; position: fixed; right: 1rem; bottom: 5.6rem; z-index: 40;
+    width: 3.2rem; height: 3.2rem; border-radius: 50%; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--accent-ink); border: 0; cursor: pointer; box-shadow: var(--shadow-soft);
+  }
+  body.wp-on #workPulse.open {
+    display: block; position: fixed; right: 1rem; bottom: 9.2rem; z-index: 40; width: min(20rem, calc(100vw - 2rem));
+  }
+  #workPulse {
+    background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--shadow-soft);
+    padding: 0.9rem 1rem; border: 1px solid var(--line-soft);
+  }
+  .wp-title { font-weight: 700; margin-bottom: 0.1rem; }
+  .wp-sub { font-size: 0.78rem; color: var(--ink-faint); margin-bottom: 0.6rem; }
+  .wp-stats { display: grid; gap: 0.3rem; margin-bottom: 0.6rem; }
+  .wp-stat { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--ink-soft); }
+  .wp-stat b { margin-left: auto; font-family: "JetBrains Mono", monospace; color: var(--ink); }
+  .wp-stat .swatch { width: 1.1rem; }
+  .wp-svg { width: 100%; height: auto; display: block; }
+  @media (min-width: 1280px) {
+    body.wp-on #workPulseFab { display: none; }
+    body.wp-on #workPulse {
+      display: block; position: fixed; left: 1.5rem; top: 6rem; width: 17rem; z-index: 5;
+    }
+  }
+
   /* ---------- compare page ---------- */
   .compare-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.9rem 0 1.2rem; }
   .compare-chip {
@@ -1933,6 +1961,100 @@
     return { points: pts, totalMin: Math.round(cum), domainEnd: domainEnd };
   }
 
+  // ---------- Work pulse: today's Work minutes so far vs yesterday and the
+  // recent weekday average, all read at the same time of day ----------
+  function seriesValueAt(points, t) {
+    var prev = points[0];
+    for (var i = 1; i < points.length; i++) {
+      var q = points[i];
+      if (t <= q[0]) {
+        if (q[0] === prev[0]) return q[1];
+        return prev[1] + (q[1] - prev[1]) * (t - prev[0]) / (q[0] - prev[0]);
+      }
+      prev = q;
+    }
+    return prev[1];
+  }
+  function updateWorkPulse() {
+    var on = route === "schedulebeta";
+    document.body.classList.toggle("wp-on", on);
+    var el = document.getElementById("workPulse");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "workPulse";
+      document.body.appendChild(el);
+      var fab = document.createElement("button");
+      fab.type = "button"; fab.id = "workPulseFab";
+      fab.setAttribute("aria-label", "Work so far today");
+      fab.innerHTML = '<i data-lucide="activity"></i>';
+      fab.addEventListener("click", function () { el.classList.toggle("open"); });
+      document.body.appendChild(fab);
+    }
+    if (!on) return;
+    var CAT = "Work";
+    var nowD = new Date();
+    var nowMin = nowD.getHours() * 60 + nowD.getMinutes();
+    var today = todayKey();
+    var yKey = dateKey(new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate() - 1));
+    var wk = [];
+    for (var d = 1; d <= 7; d++) {
+      var dd = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate() - d);
+      if (dd.getDay() !== 0 && dd.getDay() !== 6) wk.push(compareSeries(dateKey(dd), CAT).points);
+    }
+    var tSeries = compareSeries(today, CAT).points, ySeries = compareSeries(yKey, CAT).points;
+    function avgAt(t) {
+      if (!wk.length) return 0;
+      return wk.reduce(function (a, pts) { return a + seriesValueAt(pts, t); }, 0) / wk.length;
+    }
+    var tNow = seriesValueAt(tSeries, nowMin), yNow = seriesValueAt(ySeries, nowMin), aNow = avgAt(nowMin);
+    var x0 = 360, x1 = Math.min(1440, Math.max(1080, Math.ceil((nowMin + 1) / 60) * 60));
+    var W = 260, H = 120, padL = 4, padR = 4, padT = 12, padB = 18;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var steps = 48, ts = [];
+    for (var i = 0; i <= steps; i++) ts.push(x0 + (Math.min(nowMin, x1) - x0) * i / steps);
+    var lines = [
+      { cls: "avg", color: "var(--compare-a)", dash: "5,3", f: avgAt },
+      { cls: "yest", color: "var(--compare-b)", dash: "", f: function (t) { return seriesValueAt(ySeries, t); } },
+      { cls: "today", color: "var(--accent)", dash: "", f: function (t) { return seriesValueAt(tSeries, t); } }
+    ];
+    var vals = lines.map(function (ln) { return ts.map(function (t) { return ln.f(t); }); });
+    var niceMax = niceMaxMinutes(Math.max(30, Math.max.apply(null, [].concat.apply([], vals))));
+    function xAt(m) { return padL + (m - x0) / (x1 - x0) * plotW; }
+    function yAt(v) { return padT + plotH - Math.min(1, v / niceMax) * plotH; }
+    var paths = lines.map(function (ln, k) {
+      var dpath = ts.map(function (t, i) { return (i ? "L" : "M") + xAt(t).toFixed(1) + "," + yAt(vals[k][i]).toFixed(1); }).join(" ");
+      return '<path d="' + dpath + '" fill="none" stroke="' + ln.color + '" stroke-width="' + (ln.cls === "today" ? 2.5 : 1.8) +
+        '" stroke-linejoin="round" stroke-linecap="round"' + (ln.dash ? ' stroke-dasharray="' + ln.dash + '"' : "") + "/>";
+    }).join("");
+    var grid = [0.5, 1].map(function (f) {
+      var y = (padT + plotH * (1 - f)).toFixed(1);
+      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="var(--line-soft)"/>';
+    }).join("");
+    var xl = "";
+    for (var h = x0; h <= x1; h += (x1 - x0 > 600 ? 180 : 120)) {
+      var hh = Math.floor(h / 60) % 24;
+      xl += '<text x="' + xAt(h).toFixed(1) + '" y="' + (H - 4) + '" font-size="9" fill="var(--ink-faint)" text-anchor="middle">' +
+        (hh % 12 || 12) + (hh < 12 ? "a" : "p") + "</text>";
+    }
+    var nowX = xAt(Math.min(nowMin, x1)).toFixed(1);
+    var svg = '<svg class="wp-svg" viewBox="0 0 ' + W + " " + H + '">' + grid +
+      '<text x="' + padL + '" y="' + (padT - 3) + '" font-size="9" fill="var(--ink-faint)">' + fmtMins(niceMax) + "</text>" +
+      '<line x1="' + nowX + '" y1="' + padT + '" x2="' + nowX + '" y2="' + (padT + plotH) + '" stroke="var(--ink-faint)" stroke-dasharray="2,3"/>' +
+      paths + xl + "</svg>";
+    function stat(color, dash, label, v) {
+      return '<div class="wp-stat"><span class="swatch" style="border-color:' + color + (dash ? ";border-top-style:dashed" : "") + '"></span>' +
+        label + "<b>" + fmtMins(Math.round(v)) + "</b></div>";
+    }
+    var clock = pad(nowD.getHours()) + ":" + pad(nowD.getMinutes());
+    el.innerHTML = '<div class="wp-title">Work so far</div>' +
+      '<div class="wp-sub">Up to ' + clock + ", same time each day</div>" +
+      '<div class="wp-stats">' +
+        stat("var(--accent)", false, "Today", tNow) +
+        stat("var(--compare-b)", false, "Yesterday", yNow) +
+        stat("var(--compare-a)", true, "Avg weekday, last 7 days", aNow) +
+      "</div>" + svg;
+  }
+
   // ---------- routing ----------
   // "#day[/DATE]" full day · "#overview[/DATE]" day breakdown · "#goals" · else home
   function applyRoute() {
@@ -2031,6 +2153,7 @@
     renderInner();
     updateTabbar();
     renderAddFormChips();
+    updateWorkPulse();
     if (window.lucide) lucide.createIcons();
   }
   function renderInner() {
@@ -5270,6 +5393,7 @@
 
   // keep the "now" ticking while an entry is still running
   setInterval(function () {
+    if (route === "schedulebeta") { updateWorkPulse(); return; }
     if (viewDate !== todayKey()) return;
     if (route === "overview") { renderOverview(); return; }
     if ((route === "home" || route === "day") && document.querySelector(".t-dur .now")) {
