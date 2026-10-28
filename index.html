@@ -1860,6 +1860,13 @@
     }
     return credit;
   }
+  // overview only: show what the day's plan (Schedule Beta) adds up to
+  // instead of what's been logged. Not remembered — always starts off.
+  var overviewShowScheduled = false;
+  function overviewToggleHtml() {
+    return '<label class="check-row exact-only-row"><input type="checkbox" class="ov-scheduled-toggle"' +
+      (overviewShowScheduled ? " checked" : "") + "> Show scheduled duration (the whole plan)</label>";
+  }
   function exactToggleHtml() {
     return '<label class="check-row exact-only-row"><input type="checkbox" class="exact-only-toggle"' +
       (exactOnly ? " checked" : "") + "> Show exact duration only</label>";
@@ -2954,7 +2961,17 @@
 
     var credit = creditedMsByEntry(viewDate);
     var wallMs = 0, alongMs = 0, byCat = {};
-    rows.forEach(function (r) {
+    if (overviewShowScheduled) {
+      var plan = scheduleBetaRows(state, viewDate);
+      plan.forEach(function (r, j) {
+        if (!r.time) return;
+        var m = scheduleLiveDurationMin(plan, j);
+        if (m == null) m = r.plannedMin || 0;
+        wallMs += m * 60000;
+        var c = r.category || "—";
+        byCat[c] = (byCat[c] || 0) + m * 60000;
+      });
+    } else rows.forEach(function (r) {
       var d = credit[r.entry.id] || 0;
       if (r.lane === "main") wallMs += d; else alongMs += d;
       var c = r.entry.category || "—";
@@ -2970,7 +2987,8 @@
     items.sort(function (a, b) { return b.spent - a.spent; });
 
     if (!items.length) {
-      box.innerHTML = exactToggleHtml() + '<p class="ov-empty">Nothing logged yet for this day.</p>';
+      box.innerHTML = overviewToggleHtml() + exactToggleHtml() +
+        '<p class="ov-empty">' + (overviewShowScheduled ? "Nothing scheduled for this day." : "Nothing logged yet for this day.") + "</p>";
       return;
     }
 
@@ -2982,9 +3000,9 @@
     var limitKept = limitG.filter(function (x) { return x.spent <= x.goal; }).length;
 
     var gist = '<div class="ov-gist">' +
-      "You’ve tracked <b>" + fmtMins(Math.round(wallMs / 60000)) + "</b>" +
+      (overviewShowScheduled ? "You’ve scheduled <b>" : "You’ve tracked <b>") + fmtMins(Math.round(wallMs / 60000)) + "</b>" +
       (alongMs >= 60000 ? ", plus " + fmtMins(Math.round(alongMs / 60000)) + " alongside," : "") +
-      (isToday ? " so far today." : " on this day.") +
+      (overviewShowScheduled ? (isToday ? " for today." : " for this day.") : isToday ? " so far today." : " on this day.") +
       '<div class="ov-gist-line">Most time on <b>' + escapeHtml(top.cat) + "</b> · " + fmtMins(top.spent) + ".</div>" +
       (investG.length || limitG.length
         ? '<div class="ov-gist-line">' +
@@ -3027,7 +3045,7 @@
       "</div>";
     }).join("");
 
-    box.innerHTML = exactToggleHtml() + gist + '<div class="ov-section-label">Where your time went</div>' + list;
+    box.innerHTML = overviewToggleHtml() + exactToggleHtml() + gist + '<div class="ov-section-label">Where your time went</div>' + list;
   }
 
   // ---------- day export (CSV + a report to paste into ChatGPT) ----------
@@ -4764,6 +4782,11 @@
     if (!ev.target.classList.contains("exact-only-toggle")) return;
     exactOnly = ev.target.checked;
     try { localStorage.setItem(EXACT_ONLY_KEY, exactOnly ? "1" : "0"); } catch (e) {}
+    render();
+  });
+  document.addEventListener("change", function (ev) {
+    if (!ev.target.classList.contains("ov-scheduled-toggle")) return;
+    overviewShowScheduled = ev.target.checked;
     render();
   });
   trendBody.addEventListener("change", function (ev) {
