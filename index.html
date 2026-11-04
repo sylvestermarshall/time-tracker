@@ -429,8 +429,10 @@
   }
   body.wp-on #workPulse.open {
     display: block; position: fixed; right: 1rem; bottom: 9.2rem; z-index: 40; width: min(20rem, calc(100vw - 2rem));
+    max-height: calc(100vh - 12rem); overflow-y: auto; overscroll-behavior: contain;
   }
-  #workPulse {
+  .wp-col { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem; }
+  .wp-card {
     background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--shadow-soft);
     padding: 0.9rem 1rem; border: 1px solid var(--line-soft);
   }
@@ -443,9 +445,11 @@
   .wp-svg { width: 100%; height: auto; display: block; }
   @media (min-width: 1280px) {
     body.wp-on #workPulseFab { display: none; }
-    body.wp-on #workPulse {
-      display: block; position: fixed; left: 1.5rem; top: 6rem; width: 17rem; z-index: 5;
-    }
+    body.wp-on #workPulse { display: contents; }
+    body.wp-on #workPulse .wp-col { position: fixed; top: 6rem; width: 17rem; z-index: 5; margin: 0;
+      max-height: calc(100vh - 7rem); overflow-y: auto; }
+    body.wp-on #wpLeft { left: 1.5rem; }
+    body.wp-on #wpRight { right: 1.5rem; }
   }
 
   /* ---------- compare page ---------- */
@@ -1975,6 +1979,9 @@
     }
     return prev[1];
   }
+  // the pulse categories, in the order they're laid out: first two stack in
+  // the left column on desktop, last two in the right one
+  var PULSE_CATS = ["Work", "Upskilling", "Venture", "Career"];
   function updateWorkPulse() {
     var on = route === "schedulebeta";
     document.body.classList.toggle("wp-on", on);
@@ -1982,20 +1989,32 @@
     if (!el) {
       el = document.createElement("div");
       el.id = "workPulse";
+      el.innerHTML = '<div class="wp-col" id="wpLeft"></div><div class="wp-col" id="wpRight"></div>';
       document.body.appendChild(el);
       var fab = document.createElement("button");
       fab.type = "button"; fab.id = "workPulseFab";
-      fab.setAttribute("aria-label", "Work so far today");
+      fab.setAttribute("aria-label", "Category pulse for today");
       fab.innerHTML = '<i data-lucide="activity"></i>';
       fab.addEventListener("click", function () { el.classList.toggle("open"); });
       document.body.appendChild(fab);
     }
     if (!on) return;
-    var CAT = "Work";
     var nowD = new Date();
+    var cards = PULSE_CATS.map(function (name) {
+      var CAT = name;
+      for (var ci = 0; ci < state.categories.length; ci++) {
+        if (state.categories[ci].toLowerCase() === name.toLowerCase()) { CAT = state.categories[ci]; break; }
+      }
+      return '<div class="wp-card">' + workPulseCardHtml(CAT, nowD) + "</div>";
+    });
+    document.getElementById("wpLeft").innerHTML = cards[0] + cards[1];
+    document.getElementById("wpRight").innerHTML = cards[2] + cards[3];
+    if (window.lucide) lucide.createIcons();
+  }
+  function workPulseCardHtml(CAT, nowD) {
     var nowMin = nowD.getHours() * 60 + nowD.getMinutes();
     var today = todayKey();
-    // days you didn't log (under an hour of Work) are skipped, not counted as
+    // days you didn't log (under an hour of the category) are skipped, not counted as
     // zero: "previous" is the latest day with at least an hour of Work, and
     // the average is over the 7 such weekdays before that one (looking back
     // as far as it takes, capped at ~4 months)
@@ -2054,8 +2073,8 @@
         label + "<b>" + fmtMins(Math.round(v)) + "</b></div>";
     }
     var clock = pad(nowD.getHours()) + ":" + pad(nowD.getMinutes());
-    el.innerHTML = '<div class="wp-title">Work so far</div>' +
-      '<div class="wp-sub">Up to ' + clock + ", same time each day. Days under 1h of Work are skipped.</div>" +
+    return '<div class="wp-title">' + escapeHtml(CAT) + ' so far</div>' +
+      '<div class="wp-sub">Up to ' + clock + ", same time each day. Days under 1h are skipped.</div>" +
       '<div class="wp-stats">' +
         stat("var(--accent)", false, "Today", tNow) +
         stat("var(--compare-b)", false, "Last logged · " + yLabel, yNow) +
