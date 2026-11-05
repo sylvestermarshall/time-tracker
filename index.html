@@ -3715,11 +3715,22 @@
   // editing a row's time shifts every later row with a time set by the same
   // delta, so bumping task A from 10:00 to 10:30 pushes B/C/etc along with it
   // instead of leaving the rest of the plan stale
+  // two neighbouring rows sharing the exact same time reads as a full 24h
+  // task (the wrap-around in scheduleLiveDurationMin) — in practice that's
+  // always a typo, so every time-entry path asks before accepting it
+  function confirmNoSameTimeNeighbour(rows, idx, t, checkNext) {
+    if (!t) return true;
+    var prev = rows[idx - 1], next = rows[idx + 1];
+    var clash = (prev && prev.time === t) || (checkNext && next && next.time === t);
+    if (!clash) return true;
+    return confirm("That puts two tasks at exactly " + t + ", which makes one of them last 24 hours. Is that really what you want?");
+  }
   function updateScheduleTime(idx, rawValue, el) {
     var t = normTime(rawValue);
     el.value = t;
     var before = (state.schedule[idx] || {}).time || "";
     if (t === before) return;
+    if (!confirmNoSameTimeNeighbour(state.schedule, idx, t, !before)) { el.value = before; return; }
     var now = new Date().toISOString();
     queueMutationQuiet(function (s) {
       var rows = s.schedule.slice();
@@ -3962,6 +3973,7 @@
   function saveScheduleBetaRow(idx, t, text, category) {
     var dayK = scheduleBetaViewDate;
     var before = (scheduleBetaRows(state, dayK)[idx] || {}).time || "";
+    if (t !== before && !confirmNoSameTimeNeighbour(scheduleBetaRows(state, dayK), idx, t, !before)) return;
     var now = new Date().toISOString();
     queueMutation(function (s) {
       var rows = scheduleBetaRows(s, dayK).slice();
@@ -5215,6 +5227,7 @@
       if (!textEl.value.trim()) { textEl.focus(); return; }
       var dur = Math.round(parseDuration(durEl.value));
       if (!dur || dur <= 0) { durEl.focus(); return; }
+      if (!confirmNoSameTimeNeighbour(scheduleBetaRows(state, scheduleBetaViewDate).slice(0, afterIdx + 1).concat([{}], scheduleBetaRows(state, scheduleBetaViewDate).slice(afterIdx + 1)), afterIdx + 1, t, false)) return;
       if (scheduleBetaInsertEat) {
         var eatRows = scheduleBetaRows(state, scheduleBetaViewDate);
         var eatNext = eatRows[afterIdx + 1], eatAfter = eatRows[afterIdx + 2];
