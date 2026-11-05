@@ -1629,9 +1629,68 @@
     });
   }
 
+  // ---- Schedule Beta undo: the last 5 changes made on that page. Each step
+  // remembers only what the change touched — the day plans whose rows
+  // differ, and the real entries it added/removed/edited — so undoing one
+  // never rolls back unrelated edits synced in from another device. ----
+  var SB_UNDO_MAX = 5;
+  var scheduleBetaUndoStack = [];
+  var scheduleBetaUndoing = false;
+  function sbUndoDiff(pre, post) {
+    var days = {};
+    var keys = Object.keys(pre.byDate).concat(Object.keys(post.byDate));
+    keys.forEach(function (k) {
+      if (k in days || !pre.byDate[k]) return;
+      if (JSON.stringify(pre.byDate[k]) !== JSON.stringify(post.byDate[k])) days[k] = pre.byDate[k];
+    });
+    var postById = {}, preById = {};
+    post.entries.forEach(function (e) { postById[e.id] = e; });
+    pre.entries.forEach(function (e) { preById[e.id] = e; });
+    var restore = pre.entries.filter(function (e) { return postById[e.id] !== e; });
+    var remove = post.entries.filter(function (e) { return !preById[e.id]; }).map(function (e) { return e.id; });
+    if (!Object.keys(days).length && !restore.length && !remove.length) return null;
+    return { days: days, restore: restore, remove: remove };
+  }
+  function undoScheduleBeta() {
+    var step = scheduleBetaUndoStack.pop();
+    if (!step) return;
+    scheduleBetaUndoing = true;
+    try {
+      queueMutation(function (s) {
+        var now = new Date().toISOString();
+        s.scheduleBetaByDate = Object.assign({}, s.scheduleBetaByDate);
+        Object.keys(step.days).forEach(function (k) {
+          // fresh stamps so the per-position merge keeps the restored rows
+          s.scheduleBetaByDate[k] = step.days[k].map(function (r) { return Object.assign({}, r, { updatedAt: now }); });
+        });
+        var ids = {};
+        step.restore.forEach(function (e) { ids[e.id] = e; });
+        s.deletedIds = Object.assign({}, s.deletedIds);
+        var kept = s.entries.filter(function (e) { return step.remove.indexOf(e.id) < 0; }).map(function (e) {
+          return ids[e.id] ? Object.assign({}, ids[e.id], { updatedAt: now }) : e;
+        });
+        step.restore.forEach(function (e) {
+          if (!kept.some(function (k) { return k.id === e.id; })) kept.push(Object.assign({}, e, { updatedAt: now }));
+          delete s.deletedIds[e.id];
+        });
+        step.remove.forEach(function (id) { s.deletedIds[id] = now; });
+        s.entries = kept;
+        return s;
+      });
+    } finally { scheduleBetaUndoing = false; }
+  }
   function queueMutation(mutateFn) {
+    var sbPre = (route === "schedulebeta" && !scheduleBetaUndoing)
+      ? { byDate: state.scheduleBetaByDate, entries: state.entries.slice() } : null;
     state = mutateFn(state);
     state = normalizeState(state);
+    if (sbPre) {
+      var diff = sbUndoDiff(sbPre, { byDate: state.scheduleBetaByDate, entries: state.entries });
+      if (diff) {
+        scheduleBetaUndoStack.push(diff);
+        if (scheduleBetaUndoStack.length > SB_UNDO_MAX) scheduleBetaUndoStack.shift();
+      }
+    }
     cacheLocal();
     render();
     if (!getToken()) return;
@@ -3053,6 +3112,9 @@
         '<input type="date" id="sbDayPicker" value="' + dayK + '">' +
         '<button type="button" class="iconbtn" id="sbDayNext" aria-label="Next day"><i data-lucide="chevron-right"></i></button>' +
       "</div>" +
+      '<div style="margin:-0.3rem 0 0.8rem;"><button type="button" class="btn btn-ghost btn-small" id="sbUndoBtn"' +
+        (scheduleBetaUndoStack.length ? "" : " disabled") + ' title="Undo the last change (up to ' + SB_UNDO_MAX + ' steps)">' +
+        '<i data-lucide="undo-2"></i>Undo' + (scheduleBetaUndoStack.length ? " (" + scheduleBetaUndoStack.length + ")" : "") + "</button></div>" +
       '<p class="goals-intro">A trial: tap any row to log a task the same way you do on Home — time (with Now / step-back), task and category with your usual chips and suggestions — but laid out ahead of time like Schedule, with the same Plan → Actual tracking, insert/delete, and done check. Drag <i data-lucide="grip-vertical"></i> to reorder tasks — times re-chain from the first one, each starting right as the one before it ends. Didn’t get to something? <i data-lucide="arrow-right"></i> pushes it into tomorrow’s plan. Use the arrows above to flip between days — each day keeps its own plan. Laying out the plan itself is standalone and never touches your real tracked entries — but marking a row <i data-lucide="check"></i> done on time also logs it for real, with that day’s date and however long it actually took, same as typing it into Home.</p>' +
       '<div class="time-wrap" style="margin-bottom:0.9rem;">' +
         '<input type="text" id="sbLaterInput" placeholder="Add a task for later — no time needed" autocomplete="off" aria-label="Add a task for later">' +
@@ -5023,11 +5085,19 @@
   });
 
   var scheduleBetaList = document.getElementById("scheduleBetaList");
+  document.addEventListener("keydown", function (ev) {
+    if (route !== "schedulebeta" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey || ev.key.toLowerCase() !== "z") return;
+    var tag = (ev.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    ev.preventDefault();
+    undoScheduleBeta();
+  });
   scheduleBetaList.addEventListener("click", function (ev) {
     // the drag handle's own pointerdown/up already drive the reorder; a
     // plain click on it (e.g. a tap with no movement) shouldn't also expand
     // the row for editing
     if (ev.target.closest(".schedulebeta-drag")) return;
+    if (ev.target.closest("#sbUndoBtn")) { undoScheduleBeta(); return; }
     if (ev.target.closest("#sbDayPrev")) {
       scheduleBetaViewDate = dateKey(new Date(keyToDate(scheduleBetaViewDate).getTime() - 86400000));
       scheduleBetaExpandedIdx = -1; scheduleBetaInsertAfter = -1;
