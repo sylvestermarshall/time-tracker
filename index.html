@@ -1785,35 +1785,47 @@
   // Two lanes: the main sequential chain (end = next main entry's start, unless a
   // manual end is set), and free-floating "alongside" entries that carry their own
   // explicit start + end and never touch the chain.
-  function rowsForDay(dayK) {
-    var all = state.entries.slice().sort(function (a, b) { return new Date(a.startAt) - new Date(b.startAt); });
+  // when set (by updateWorkPulse), rowsForDay reads from this day->rows map
+  // instead of re-sorting every entry on each call
+  var rowsCache = null;
+  function buildRows(onlyDay) {
+    var t = {};
+    var all = state.entries.map(function (e) { t[e.id] = new Date(e.startAt).getTime(); return e; })
+      .sort(function (a, b) { return t[a.id] - t[b.id]; });
+    var out = {};
+    function push(dayK, row) { (out[dayK] || (out[dayK] = [])).push(row); }
     var mainSeq = all.filter(function (e) { return !e.concurrent; }); // includes stop markers
-    var rows = [];
-
     for (var i = 0; i < mainSeq.length; i++) {
       var e = mainSeq[i];
-      if (dateKey(new Date(e.startAt)) !== dayK) continue;
+      var dk = dateKey(new Date(e.startAt));
+      if (onlyDay && dk !== onlyDay) continue;
       var next = mainSeq[i + 1];
       var autoEndAt = next ? next.startAt : null;
       var endAt = e.endAt || autoEndAt; // a manual end wins over the next entry's start
-      rows.push({
+      push(dk, {
         entry: e, lane: "main", endAt: endAt, autoEndAt: autoEndAt,
         hasManualEnd: !!e.endAt, isLast: !next,
         ongoing: !next && !e.endAt
       });
     }
-
-    all.filter(function (e) { return e.concurrent; }).forEach(function (e) {
-      if (dateKey(new Date(e.startAt)) !== dayK) return;
-      rows.push({
+    all.forEach(function (e) {
+      if (!e.concurrent) return;
+      var dk = dateKey(new Date(e.startAt));
+      if (onlyDay && dk !== onlyDay) return;
+      push(dk, {
         entry: e, lane: "alongside", endAt: e.endAt || null, autoEndAt: null,
         hasManualEnd: !!e.endAt, isLast: false,
         ongoing: !e.endAt
       });
     });
-
-    rows.sort(function (a, b) { return new Date(a.entry.startAt) - new Date(b.entry.startAt); });
-    return rows;
+    Object.keys(out).forEach(function (k) {
+      out[k].sort(function (a, b) { return t[a.entry.id] - t[b.entry.id]; });
+    });
+    return out;
+  }
+  function rowsForDay(dayK) {
+    if (rowsCache) return (rowsCache[dayK] || []).slice();
+    return buildRows(dayK)[dayK] || [];
   }
 
   // the single main-chain entry that's still genuinely open right now —
@@ -2059,13 +2071,17 @@
     }
     if (!on) return;
     var nowD = new Date();
-    var cards = PULSE_CATS.map(function (name) {
+    rowsCache = buildRows();
+    var cards;
+    try {
+    cards = PULSE_CATS.map(function (name) {
       var CAT = name;
       for (var ci = 0; ci < state.categories.length; ci++) {
         if (state.categories[ci].toLowerCase() === name.toLowerCase()) { CAT = state.categories[ci]; break; }
       }
       return '<div class="wp-card">' + workPulseCardHtml(CAT, nowD) + "</div>";
     });
+    } finally { rowsCache = null; }
     document.getElementById("wpLeft").innerHTML = cards[0] + cards[1];
     document.getElementById("wpRight").innerHTML = cards[2] + cards[3];
     if (window.lucide) lucide.createIcons();
