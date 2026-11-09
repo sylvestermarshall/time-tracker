@@ -3168,7 +3168,7 @@
           }
           laterSel.value = cat;
         }
-      }, function () { document.getElementById("sbLaterAddBtn").click(); });
+      }, function () { document.getElementById("sbLaterAddBtn").click(); }, true);
     }
 
     // at most one of these is ever open at once (opening either one closes
@@ -4738,15 +4738,18 @@
   // suggestion is chosen — cat is the catalog's mapped category, if any.
   // onEnterNoPick (optional) runs on Enter when nothing is highlighted, e.g.
   // to advance focus to the category field. Returns a hide() function.
-  function wireTaskAc(input, list, onPick, onEnterNoPick) {
+  function wireTaskAc(input, list, onPick, onEnterNoPick, autoFirst) {
     var active = -1;
+    // autoFirst: pre-highlight the top suggestion so Enter picks it — only on
+    // devices with a real pointer/keyboard, where Enter is actually usable
+    var firstOn = autoFirst && window.matchMedia && matchMedia("(hover: hover)").matches;
     function show() {
       var m = taskMatches(input.value);
       if (!m.length) { hide(); return; }
-      active = -1;
+      active = firstOn ? 0 : -1;
       list.innerHTML = m.map(function (t, i) {
         var cat = state.taskCatalog[t];
-        return '<div class="ac-item" data-i="' + i + '" data-name="' + escapeHtml(t) + '" data-cat="' + escapeHtml(cat) + '">' +
+        return '<div class="ac-item' + (i === active ? " active" : "") + '" data-i="' + i + '" data-name="' + escapeHtml(t) + '" data-cat="' + escapeHtml(cat) + '">' +
           escapeHtml(t) + '<span class="cnt">' + escapeHtml(cat) + "</span></div>";
       }).join("");
       list.hidden = false;
