@@ -2518,8 +2518,30 @@
     { act: "menu-chips", icon: "grip-vertical", label: "Quick-pick chips", go: goToChips },
     { act: "menu-trend", icon: "trending-up", label: "Category trend", go: goToTrend },
     { act: "menu-schedule", icon: "calendar-clock", label: "Schedule", go: goToSchedule },
-    { act: "menu-schedulebeta", icon: "flask-conical", label: "Schedule Beta", go: goToScheduleBeta }
+    { act: "menu-schedulebeta", icon: "flask-conical", label: "Schedule Beta", go: goToScheduleBeta },
+    { act: "menu-install", icon: "download", label: "Install app", go: installApp }
   ];
+  // one-tap install: Chrome/Android/desktop expose a real install prompt;
+  // iPhone has none, so show the Add to Home Screen steps instead
+  var deferredInstall = null;
+  window.addEventListener("beforeinstallprompt", function (ev) { ev.preventDefault(); deferredInstall = ev; });
+  window.addEventListener("appinstalled", function () { deferredInstall = null; });
+  function installApp() {
+    if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone) {
+      alert("Already installed — you're using the app right now."); return;
+    }
+    if (deferredInstall) {
+      var ev = deferredInstall; deferredInstall = null;
+      ev.prompt();
+      return;
+    }
+    var ua = navigator.userAgent || "";
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) {
+      alert("To install on iPhone/iPad (in Safari): tap the Share button (square with an up arrow), scroll down, tap “Add to Home Screen”, then Add.");
+    } else {
+      alert("Install isn't offered by this browser right now. In Chrome, open the ⋮ menu and choose “Install app” (or “Add to Home screen”). If you don't see it, reload the page once and try again.");
+    }
+  }
   function renderMenu() {
     document.getElementById("pageTitle").textContent = "Menu";
     document.getElementById("menuList").innerHTML = MENU_ITEMS.map(function (m) {
