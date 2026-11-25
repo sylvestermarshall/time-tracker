@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Time Tracker</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1f6f6b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Time Tracker">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Catamaran:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -5659,6 +5667,36 @@
   applyRoute();
   initSync();
 })();
+</script>
+<script>
+// installable app: offline support + "update available" banner
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    var hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register("sw.js").then(function (reg) {
+      function banner() {
+        if (document.getElementById("updBanner")) return;
+        var b = document.createElement("button");
+        b.id = "updBanner"; b.type = "button";
+        b.textContent = "Update available \u2014 tap to reload";
+        b.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);bottom:1rem;z-index:9999;background:#1f6f6b;color:#fff;border:0;border-radius:999px;padding:0.7rem 1.1rem;font:600 0.9rem inherit;box-shadow:0 4px 14px rgba(0,0,0,.25);";
+        b.addEventListener("click", function () { location.reload(); });
+        document.body.appendChild(b);
+      }
+      reg.addEventListener("updatefound", function () {
+        var nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener("statechange", function () {
+          if (nw.state === "installed" && hadController) banner();
+        });
+      });
+      // check for a new version whenever the app comes back to the foreground
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) reg.update().catch(function () {});
+      });
+    }).catch(function () {});
+  });
+}
 </script>
 </body>
 </html>
